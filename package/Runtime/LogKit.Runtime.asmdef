@@ -1,0 +1,12 @@
+{
+    "name": "LogKit.Runtime",
+    "rootNamespace": "LogKit",
+    "references": [],
+    "includePlatforms": [],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": false,
+    "precompiledReferences": [],
+    "autoReferenced": true,
+    "noEngineReferences": false
+}
