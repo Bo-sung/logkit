@@ -341,11 +341,12 @@ public sealed class CsvSessionStore
         bool rawDeleted = false;
 
         // 세션 단위 잠금으로 저장 중인 파트와의 경합을 막는다.
+        // 메타 경로가 곧 세션 잠금이므로, 메타 삭제는 잠금 없이 지운다(재진입 시 교착).
         SemaphoreSlim gate = FileLocks.Get(MetaPath(sessionId));
         gate.Wait();
         try
         {
-            csvDeleted |= DeleteLocked(MetaPath(sessionId));
+            csvDeleted |= DeleteFileWithoutLock(MetaPath(sessionId));
             csvDeleted |= DeleteLocked(MetricsCsvPath(sessionId));
             csvDeleted |= DeleteLocked(SessionCsvPath(sessionId));
             if (Directory.Exists(SessionsDirectory))
@@ -372,6 +373,28 @@ public sealed class CsvSessionStore
         }
 
         return (csvDeleted, rawDeleted);
+    }
+
+    /// <summary>
+    /// 파일 잠금 없이 파일을 삭제한다.
+    /// path를 입력으로 사용하며 삭제했으면 true를, 파일이 없으면 false를 반환한다. 이미 잠금을 보유한 경로에 쓴다.
+    /// </summary>
+    private static bool DeleteFileWithoutLock(string path)
+    {
+        if (!File.Exists(path))
+        {
+            return false;
+        }
+
+        try
+        {
+            File.Delete(path);
+            return true;
+        }
+        catch (IOException)
+        {
+            return false;
+        }
     }
 
     /// <summary>
