@@ -20,15 +20,21 @@ public sealed class ApiKeyAuth
     }
 
     /// <summary>
-    /// /api 경로 요청의 X-Api-Key를 설정된 키와 정확히 비교한다.
+    /// /api 경로 요청의 X-Api-Key 헤더 또는 key 쿼리 매개변수를 설정된 키와 정확히 비교한다.
+    /// 쿼리 매개변수는 브라우저 다운로드 링크처럼 헤더를 붙일 수 없는 요청을 위한 보조 수단이다.
     /// context를 입력으로 사용하며, 키가 없거나 다르면 401 응답을 쓰고 정지, 맞으면 _next를 호출한다.
-    /// health 경로는 검증하지 않는다.
+    /// health와 대시보드 페이지 경로는 검증하지 않는다.
     /// </summary>
     public async Task InvokeAsync(HttpContext context)
     {
         if (context.Request.Path.StartsWithSegments("/api", StringComparison.OrdinalIgnoreCase))
         {
             string? provided = context.Request.Headers["X-Api-Key"].FirstOrDefault();
+            if (string.IsNullOrEmpty(provided))
+            {
+                provided = context.Request.Query["key"].FirstOrDefault();
+            }
+
             if (string.IsNullOrEmpty(_options.ApiKey) || !string.Equals(provided, _options.ApiKey, StringComparison.Ordinal))
             {
                 context.Response.StatusCode = StatusCodes.Status401Unauthorized;

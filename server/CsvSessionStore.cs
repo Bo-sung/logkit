@@ -58,6 +58,12 @@ public sealed class CsvSessionStore
     /// <summary>raw gzip이 들어갈 디렉터리 경로.</summary>
     public string RawDirectory => Path.Combine(_options.DataPath, "raw");
 
+    /// <summary>세션 CSV 파일의 전체 경로.</summary>
+    public string SessionCsvPath(string sessionId) => Path.Combine(SessionsDirectory, sessionId + ".csv");
+
+    /// <summary>raw gzip 파일의 전체 경로.</summary>
+    public string RawFilePath(string sessionId) => Path.Combine(RawDirectory, sessionId + ".jsonl.gz");
+
     /// <summary>
     /// sessionId가 파일명으로 쓸 수 있는 형태인지 검사한다. path traversal과 제어문자 혼입을 막는다.
     /// sessionId를 입력으로 사용하며 통과하면 true를 반환한다.
@@ -96,6 +102,80 @@ public sealed class CsvSessionStore
 
             WriteAtomicText(path, builder.ToString());
             return replaced;
+        }
+        finally
+        {
+            gate.Release();
+        }
+    }
+
+    /// <summary>
+    /// 세션 CSV가 디스크에 있는지 확인한다.
+    /// sessionId를 입력으로 사용하며 있으면 true를 반환한다.
+    /// </summary>
+    public bool SessionExists(string sessionId) => File.Exists(SessionCsvPath(sessionId));
+
+    /// <summary>
+    /// 세션 CSV 전문을 읽어 들인다. 다른 스레드의 교체 쓰기와 충돌하지 않도록 공유 읽기로 연다.
+    /// sessionId를 입력으로 사용하며 파일이 없으면 null을 반환한다.
+    /// </summary>
+    public string? ReadSessionCsv(string sessionId)
+    {
+        string path = SessionCsvPath(sessionId);
+        if (!File.Exists(path))
+        {
+            return null;
+        }
+
+        using FileStream stream = new(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
+        using StreamReader reader = new(stream, System.Text.Encoding.UTF8);
+        return reader.ReadToEnd();
+    }
+
+    /// <summary>
+    /// raw gzip 바이트를 읽어 들인다.
+    /// sessionId를 입력으로 사용하며 파일이 없으면 null을 반환한다.
+    /// </summary>
+    public byte[]? ReadRawFile(string sessionId)
+    {
+        string path = RawFilePath(sessionId);
+        if (!File.Exists(path))
+        {
+            return null;
+        }
+
+        using FileStream stream = new(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
+        using MemoryStream buffer = new();
+        stream.CopyTo(buffer);
+        return buffer.ToArray();
+    }
+
+    /// <summary>
+    /// 세션 CSV와 raw gzip 파일을 삭제한다.
+    /// sessionId를 입력으로 사용하며 각각 삭제했는지 담은 튜플을 반환한다.
+    /// </summary>
+    public (bool SessionCsv, bool Raw) DeleteSessionFiles(string sessionId)
+    {
+        return (DeleteLocked(SessionCsvPath(sessionId)), DeleteLocked(RawFilePath(sessionId)));
+    }
+
+    /// <summary>
+    /// 파일을 파일 잠금과 함께 삭제한다.
+    /// path를 입력으로 사용하며 삭제했으면 true를, 파일이 없으면 false를 반환한다.
+    /// </summary>
+    private static bool DeleteLocked(string path)
+    {
+        if (!File.Exists(path))
+        {
+            return false;
+        }
+
+        SemaphoreSlim gate = FileLocks.Get(path);
+        gate.Wait();
+        try
+        {
+            File.Delete(path);
+            return true;
         }
         finally
         {

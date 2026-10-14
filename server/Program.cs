@@ -95,7 +95,7 @@ public static class Program
     private static readonly Regex _monthPattern = new(@"^\d{4}-\d{2}$", RegexOptions.Compiled);
 
     /// <summary>
-    /// 서버를 기동한다. 설정과 서비스를 등록하고 /api/logs, /health, /api/summary/{yyyy-MM}.csv를 연결한 뒤 요청을 처리한다.
+    /// 서버를 기동한다. 설정과 서비스를 등록하고 업로드·조회·삭제·대시보드 엔드포인트를 연결한 뒤 요청을 처리한다.
     /// args를 받아들이며, data 디렉터리를 만들고 만료된 raw 파일을 삭제한 후 현재 스레드에서 계속 대기한다.
     /// </summary>
     public static void Main(string[] args)
@@ -114,8 +114,17 @@ public static class Program
         WebApplication app = builder.Build();
 
         app.UseMiddleware<ApiKeyAuth>();
+        app.MapGet("/", () => Results.Redirect("/dashboard"));
+        app.MapGet("/dashboard", HandleDashboard);
         app.MapPost("/api/logs", HandleUploadAsync);
         app.MapGet("/health", HandleHealth);
+        app.MapGet("/api/months", HandleMonths);
+        app.MapGet("/api/sessions", HandleSessions);
+        app.MapGet("/api/sessions/{sessionId}", HandleSessionDetail);
+        app.MapGet("/api/sessions/{sessionId}/csv", HandleSessionCsv);
+        app.MapGet("/api/sessions/{sessionId}/raw", HandleSessionRaw);
+        app.MapDelete("/api/sessions/{sessionId}", HandleDeleteSession);
+        app.MapDelete("/api/months/{month}", HandleDeleteMonth);
         app.MapGet("/api/summary/{month}.csv", HandleSummary);
 
         PrepareStorage(options, app.Services.GetRequiredService<CsvSessionStore>(), app.Logger);
@@ -192,6 +201,252 @@ public static class Program
     private static IResult HandleHealth()
     {
         return Results.Text("ok", "text/plain");
+    }
+
+    /// <summary>
+    /// GET /dashboard 처리기. 브라우저 로그 열람 대시보드 HTML을 돌려준다.
+    /// 입력값은 없으며 200 상태와 text/html 본문을 반환한다.
+    /// </summary>
+    private static IResult HandleDashboard()
+    {
+        return Results.Content(DashboardPage.Html, "text/html; charset=utf-8");
+    }
+
+    /// <summary>
+    /// GET /api/months 처리기. 요약 파일이 있는 월 목록과 월별 집계를 돌려준다.
+    /// 입력값은 없으며 200 상태와 월 목록 JSON을 반환한다.
+    /// </summary>
+    private static IResult HandleMonths(SessionSummary summary)
+    {
+        return Results.Json(new MonthsResponse { Months = summary.ListMonths() }, _jsonOptions);
+    }
+
+    /// <summary>
+    /// GET /api/sessions 처리기. 월별 세션 목록을 검색 조건에 맞춰 돌려준다.
+    /// month(필수), q(ID·플랫폼·버전 부분 일치), onlyIssues(경고·오류·예외가 있는 세션만), sort(date·errors·total)를 사용하며
+    /// month 형식이 틀리면 400, 그 외에는 200과 세션 목록 JSON을 반환한다.
+    /// </summary>
+    private static IResult HandleSessions(
+        string? month,
+        string? q,
+        string? onlyIssues,
+        string? sort,
+        SessionSummary summary)
+    {
+        if (string.IsNullOrEmpty(month) || !_monthPattern.IsMatch(month))
+        {
+            return Results.BadRequest(new { error = "month must be yyyy-MM" });
+        }
+
+        List<SessionRow> sessions = summary.GetMonthSessions(month);
+
+        if (!string.IsNullOrEmpty(q))
+        {
+            sessions = sessions.Where(row =>
+                row.SessionId.Contains(q, StringComparison.OrdinalIgnoreCase)
+                || row.Platform.Contains(q, StringComparison.OrdinalIgnoreCase)
+                || row.AppVersion.Contains(q, StringComparison.OrdinalIgnoreCase)).ToList();
+        }
+
+        if (string.Equals(onlyIssues, "true", StringComparison.OrdinalIgnoreCase))
+        {
+            sessions = sessions.Where(row => row.Warnings + row.Errors + row.Exceptions > 0).ToList();
+        }
+
+        sessions = sort switch
+        {
+            "errors" => sessions.OrderByDescending(row => row.Errors + row.Exceptions).ThenByDescending(row => row.DateUtc).ToList(),
+            "total" => sessions.OrderByDescending(row => row.Total).ThenByDescending(row => row.DateUtc).ToList(),
+            _ => sessions,
+        };
+
+        return Results.Json(new SessionListResponse { Month = month, Count = sessions.Count, Sessions = sessions }, _jsonOptions);
+    }
+
+    /// <summary>
+    /// GET /api/sessions/{sessionId} 처리기. 세션 메타와 필터링한 로그 항목 페이지를 돌려준다.
+    /// levels(쉼표 구분), category, scene, q(메시지·데이터·스택 부분 일치), offset, limit을 사용하며
+    /// 세션 파일과 요약 행이 모두 없으면 404, 그 외에는 200과 상세 JSON을 반환한다.
+    /// </summary>
+    private static IResult HandleSessionDetail(
+        string sessionId,
+        string? levels,
+        string? category,
+        string? scene,
+        string? q,
+        string? offset,
+        string? limit,
+        CsvSessionStore store,
+        SessionSummary summary)
+    {
+        if (!CsvSessionStore.IsValidSessionId(sessionId))
+        {
+            return Results.BadRequest(new { error = "invalid sessionId" });
+        }
+
+        (string Month, SessionRow Row)? meta = summary.FindSession(sessionId);
+        string? csvText = store.ReadSessionCsv(sessionId);
+        if (meta is null && csvText is null)
+        {
+            return Results.NotFound();
+        }
+
+        SessionRow metaRow = meta?.Row ?? new SessionRow();
+        List<LogEntry> entries = csvText is null ? new List<LogEntry>() : SessionQuery.ParseEntries(csvText);
+        HashSet<string> levelSet = ParseLevels(levels);
+        int parsedOffset = Math.Max(0, ParseIntQuery(offset));
+        int parsedLimit = Math.Clamp(ParseIntQuery(limit, SessionQuery.DefaultLimit), 1, SessionQuery.MaxLimit);
+        (int matched, List<LogEntry> page) = SessionQuery.Filter(
+            entries, levelSet, category ?? string.Empty, scene ?? string.Empty, q ?? string.Empty, parsedOffset, parsedLimit);
+
+        return Results.Json(new SessionDetailResponse
+        {
+            SessionId = sessionId,
+            HasCsv = csvText is not null,
+            HasSummaryRow = meta is not null,
+            DateUtc = metaRow.DateUtc,
+            DurationSec = metaRow.DurationSec,
+            EndedCleanly = metaRow.EndedCleanly,
+            Total = metaRow.Total,
+            Warnings = metaRow.Warnings,
+            Errors = metaRow.Errors,
+            Exceptions = metaRow.Exceptions,
+            IsEditor = metaRow.IsEditor,
+            Platform = metaRow.Platform,
+            AppVersion = metaRow.AppVersion,
+            Matched = matched,
+            Returned = page.Count,
+            Offset = parsedOffset,
+            Entries = page,
+        }, _jsonOptions);
+    }
+
+    /// <summary>
+    /// GET /api/sessions/{sessionId}/csv 처리기. 세션 CSV 파일을 내려준다.
+    /// sessionId를 입력으로 사용하며 파일이 없으면 404를 반환한다.
+    /// </summary>
+    private static IResult HandleSessionCsv(string sessionId, CsvSessionStore store)
+    {
+        if (!CsvSessionStore.IsValidSessionId(sessionId))
+        {
+            return Results.BadRequest(new { error = "invalid sessionId" });
+        }
+
+        string? text = store.ReadSessionCsv(sessionId);
+        return text is null
+            ? Results.NotFound()
+            : Results.File(System.Text.Encoding.UTF8.GetBytes(text), "text/csv; charset=utf-8", sessionId + ".csv");
+    }
+
+    /// <summary>
+    /// GET /api/sessions/{sessionId}/raw 처리기. 수신 원문 gzip을 내려준다.
+    /// sessionId를 입력으로 사용하며 파일이 없으면 404를 반환한다.
+    /// </summary>
+    private static IResult HandleSessionRaw(string sessionId, CsvSessionStore store)
+    {
+        if (!CsvSessionStore.IsValidSessionId(sessionId))
+        {
+            return Results.BadRequest(new { error = "invalid sessionId" });
+        }
+
+        byte[]? bytes = store.ReadRawFile(sessionId);
+        return bytes is null
+            ? Results.NotFound()
+            : Results.File(bytes, "application/gzip", sessionId + ".jsonl.gz");
+    }
+
+    /// <summary>
+    /// DELETE /api/sessions/{sessionId} 처리기. 세션 CSV·raw·요약 행을 모두 지운다.
+    /// sessionId를 입력으로 사용하며 지운 것이 없으면 404, 있으면 200과 삭제 결과 JSON을 반환한다.
+    /// </summary>
+    private static IResult HandleDeleteSession(string sessionId, CsvSessionStore store, SessionSummary summary)
+    {
+        if (!CsvSessionStore.IsValidSessionId(sessionId))
+        {
+            return Results.BadRequest(new { error = "invalid sessionId" });
+        }
+
+        List<string> removedMonths = summary.RemoveSession(sessionId);
+        (bool deletedCsv, bool deletedRaw) = store.DeleteSessionFiles(sessionId);
+        if (!deletedCsv && !deletedRaw && removedMonths.Count == 0)
+        {
+            return Results.NotFound();
+        }
+
+        Console.WriteLine($"delete session={sessionId} csv={deletedCsv} raw={deletedRaw} summaryMonths=[{string.Join(",", removedMonths)}]");
+        return Results.Json(new DeleteSessionResponse
+        {
+            SessionId = sessionId,
+            DeletedSessionCsv = deletedCsv,
+            DeletedRaw = deletedRaw,
+            RemovedSummaryMonths = removedMonths,
+        }, _jsonOptions);
+    }
+
+    /// <summary>
+    /// DELETE /api/months/{month} 처리기. 월의 모든 세션 파일과 요약 파일을 지운다.
+    /// month(yyyy-MM)를 입력으로 사용하며 지운 것이 없으면 404, 있으면 200과 삭제 결과 JSON을 반환한다.
+    /// </summary>
+    private static IResult HandleDeleteMonth(string month, CsvSessionStore store, SessionSummary summary)
+    {
+        if (string.IsNullOrEmpty(month) || !_monthPattern.IsMatch(month))
+        {
+            return Results.BadRequest(new { error = "month must be yyyy-MM" });
+        }
+
+        int deletedSessions = 0;
+        foreach (SessionRow row in summary.GetMonthSessions(month))
+        {
+            (bool deletedCsv, bool _) = store.DeleteSessionFiles(row.SessionId);
+            if (deletedCsv)
+            {
+                deletedSessions++;
+            }
+        }
+
+        bool deletedSummaryFile = summary.DeleteMonth(month);
+        if (deletedSessions == 0 && !deletedSummaryFile)
+        {
+            return Results.NotFound();
+        }
+
+        Console.WriteLine($"delete month={month} sessions={deletedSessions} summaryFile={deletedSummaryFile}");
+        return Results.Json(new DeleteMonthResponse
+        {
+            Month = month,
+            DeletedSessions = deletedSessions,
+            DeletedSummaryFile = deletedSummaryFile,
+        }, _jsonOptions);
+    }
+
+    /// <summary>
+    /// levels 쿼리 값을 레벨 집합으로 바꾼다.
+    /// levels(쉼표 구분)를 입력으로 사용하며 비었거나 null이면 빈 집합(전체 허용)을 반환한다.
+    /// </summary>
+    private static HashSet<string> ParseLevels(string? levels)
+    {
+        HashSet<string> set = new(StringComparer.OrdinalIgnoreCase);
+        if (string.IsNullOrEmpty(levels))
+        {
+            return set;
+        }
+
+        foreach (string part in levels.Split(','))
+        {
+            string trimmed = part.Trim();
+            if (trimmed.Length > 0)
+            {
+                set.Add(trimmed);
+            }
+        }
+
+        return set;
+    }
+
+    /// <summary>쿼리 정수를 관대하게 읽는다. text가 없거나 형식이 틀리면 fallback을 반환한다.</summary>
+    private static int ParseIntQuery(string? text, int fallback = 0)
+    {
+        return int.TryParse(text, out int value) ? value : fallback;
     }
 
     /// <summary>

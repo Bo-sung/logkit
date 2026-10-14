@@ -15,6 +15,8 @@ logkit/
 Play 중 수집 → 5초마다 로컬 JSONL → 게임 종료 시 gzip POST
 → 서버 검증(크기·키·gzip·JSON) → 세션 CSV 교체 + 월별 요약 upsert + raw 보존
 → 클라이언트로 요약 JSON 응답 (실패 시 클라이언트가 .pending 보존 후 다음 기동 재전송)
+
+서버 브라우저(/) 열람 → 월별 세션 목록 · 항목 검색 · CSV/raw 내려받기 · 세션/월 삭제
 ```
 
 ## 유니티 패키지 설치
@@ -59,7 +61,7 @@ GameLogger.Data("Info", "Run", "런 종료", new RunData { Score = 1200 });
 
 ## 수신 서버 실행 (server/)
 
-요구사항: .NET 8 SDK(빌드) 또는 ASP.NET Core 8 Runtime(실행만).
+요구사항: .NET 8 SDK(빌드) 또는 ASP.NET Core 8 Runtime(실행만). 자세한 내용은 `server/README.md`.
 
 ```bash
 cd server
@@ -76,17 +78,29 @@ dotnet run            # http://0.0.0.0:5000 에서 대기, 데이터는 server/d
 | MaxBodyBytes | 5242880 | gzip 본문 상한(초과 413) |
 | KeepRawJsonl / RawRetentionDays | true / 90 | 원문 보존 여부와 기간 |
 
-### 엔드포인트
+### 열람 — 대시보드와 API
+
+`http://서버주소/`를 열면 GM툴 형태의 열람 화면이 나온다(API 키 입력 필요). 월별 세션 목록, 레벨·카테고리·텍스트 검색, 항목 펼치기(메시지·데이터·스택), CSV/raw 내려받기, 세션·월 삭제를 지원한다. 같은 기능은 전부 API로도 제공한다:
 
 | 엔드포인트 | 인증 | 설명 |
 | --- | --- | --- |
 | `POST /api/logs` | 필요 | 업로드. 성공 202(신규)/200(교체) + 요약 JSON |
 | `GET /health` | 불필요 | `ok` |
+| `GET /dashboard` | 불필요 | 열람 대시보드(`/` 리디렉션) |
+| `GET /api/months` | 필요 | 월 목록 + 월별 집계 |
+| `GET /api/sessions?month=` | 필요 | 세션 목록(`q`, `onlyIssues`, `sort`) |
+| `GET /api/sessions/{id}` | 필요 | 세션 상세(`levels`, `category`, `scene`, `q`, `offset`, `limit`) |
+| `GET /api/sessions/{id}/csv` · `/raw` | 필요 | 세션 CSV · 수신 원문 내려받기 |
+| `DELETE /api/sessions/{id}` · `/api/months/{yyyy-MM}` | 필요 | 세션 삭제 · 월 전체 삭제 |
 | `GET /api/summary/{yyyy-MM}.csv` | 필요 | 월별 요약 CSV 다운로드 |
 
 ```bash
 # 요약 열람
 curl -H "X-Api-Key: dev-log-key" http://localhost:5000/api/summary/2026-10.csv
+
+# 오류·예외만 검색
+curl -H "X-Api-Key: dev-log-key" \
+  "http://localhost:5000/api/sessions/s1234abcd-2026101401?levels=Error,Exception&q=%EB%B3%B4%EC%8A%A4"
 ```
 
 ### 다른 PC에 상시 배포

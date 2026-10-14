@@ -1,5 +1,6 @@
 using System.Globalization;
 using System.Text;
+using System.Text.RegularExpressions;
 
 namespace LogServer;
 
@@ -13,6 +14,8 @@ public sealed class SessionSummary
     private const int COLUMN_COUNT = 11;
     private const string CRLF = "\r\n";
     private const string DATE_FORMAT = "yyyy-MM-dd HH:mm:ss";
+
+    private static readonly Regex _monthFilePattern = new(@"^(\d{4}-\d{2})\.csv$", RegexOptions.Compiled);
 
     private static readonly UTF8Encoding _utf8Bom = new(true);
 
@@ -86,7 +89,7 @@ public sealed class SessionSummary
         try
         {
             List<string[]> rows = File.Exists(path)
-                ? ParseRows(File.ReadAllText(path))
+                ? CsvText.ParseRows(File.ReadAllText(path))
                 : new List<string[]>();
             if (rows.Count == 0)
             {
@@ -103,16 +106,7 @@ public sealed class SessionSummary
                 rows.Add(row);
             }
 
-            StringBuilder builder = new StringBuilder();
-            builder.Append(SUMMARY_HEADER).Append(CRLF);
-            for (int i = 1; i < rows.Count; i++)
-            {
-                builder.Append(JoinRow(rows[i])).Append(CRLF);
-            }
-
-            string temp = path + ".tmp";
-            File.WriteAllText(temp, builder.ToString(), _utf8Bom);
-            File.Move(temp, path, true);
+            WriteSummaryFile(path, rows);
         }
         finally
         {
@@ -120,6 +114,251 @@ public sealed class SessionSummary
         }
 
         return info.Month;
+    }
+
+    /// <summary>
+    /// 요약 파일이 있는 월 목록을 월별 집계와 함께 최신순으로 돌려준다.
+    /// 입력값은 없으며 파일명이 월 형식인 요약 파일만 집계해 반환한다.
+    /// </summary>
+    public List<MonthInfo> ListMonths()
+    {
+        List<MonthInfo> months = new();
+        if (!Directory.Exists(SummaryDirectory))
+        {
+            return months;
+        }
+
+        foreach (string file in Directory.GetFiles(SummaryDirectory, "*.csv"))
+        {
+            Match match = _monthFilePattern.Match(Path.GetFileName(file));
+            if (!match.Success)
+            {
+                continue;
+            }
+
+            List<SessionRow> sessions = ReadMonthRows(match.Groups[1].Value);
+            MonthInfo info = new() { Month = match.Groups[1].Value, Sessions = sessions.Count };
+            foreach (SessionRow session in sessions)
+            {
+                info.Total += session.Total;
+                info.Warnings += session.Warnings;
+                info.Errors += session.Errors;
+                info.Exceptions += session.Exceptions;
+            }
+
+            months.Add(info);
+        }
+
+        months.Sort((a, b) => string.CompareOrdinal(b.Month, a.Month));
+        return months;
+    }
+
+    /// <summary>
+    /// 지정한 월의 요약 행을 세션 목록으로 돌려준다.
+    /// month(yyyy-MM)를 입력으로 사용하며 시작 시각 내림차순으로 정렬해 반환한다. 파일이 없으면 빈 목록을 반환한다.
+    /// </summary>
+    public List<SessionRow> GetMonthSessions(string month)
+    {
+        List<SessionRow> sessions = ReadMonthRows(month);
+        sessions.Sort((a, b) => string.CompareOrdinal(b.DateUtc, a.DateUtc));
+        return sessions;
+    }
+
+    /// <summary>
+    /// sessionId가 기록된 요약 행과 그 월을 찾는다.
+    /// sessionId를 입력으로 사용하며 찾으면 월과 행을, 없으면 null을 반환한다.
+    /// </summary>
+    public (string Month, SessionRow Row)? FindSession(string sessionId)
+    {
+        if (!Directory.Exists(SummaryDirectory))
+        {
+            return null;
+        }
+
+        foreach (string file in Directory.GetFiles(SummaryDirectory, "*.csv"))
+        {
+            Match match = _monthFilePattern.Match(Path.GetFileName(file));
+            if (!match.Success)
+            {
+                continue;
+            }
+
+            List<string[]> rows = CsvText.ParseRows(File.ReadAllText(file));
+            int index = IndexOfSession(rows, sessionId);
+            if (index < 0)
+            {
+                continue;
+            }
+
+            SessionRow? row = ToSessionRow(rows[index]);
+            if (row != null)
+            {
+                return (match.Groups[1].Value, row);
+            }
+        }
+
+        return null;
+    }
+
+    /// <summary>
+    /// 모든 월의 요약에서 sessionId 행을 제거한다.
+    /// sessionId를 입력으로 사용하며 행을 제거한 월 목록을 반환한다.
+    /// </summary>
+    public List<string> RemoveSession(string sessionId)
+    {
+        List<string> months = new();
+        if (!Directory.Exists(SummaryDirectory))
+        {
+            return months;
+        }
+
+        foreach (string file in Directory.GetFiles(SummaryDirectory, "*.csv"))
+        {
+            Match match = _monthFilePattern.Match(Path.GetFileName(file));
+            if (!match.Success)
+            {
+                continue;
+            }
+
+            SemaphoreSlim gate = FileLocks.Get(file);
+            gate.Wait();
+            try
+            {
+                if (!File.Exists(file))
+                {
+                    continue;
+                }
+
+                List<string[]> rows = CsvText.ParseRows(File.ReadAllText(file));
+                int index = IndexOfSession(rows, sessionId);
+                if (index < 0)
+                {
+                    continue;
+                }
+
+                rows.RemoveAt(index);
+                WriteSummaryFile(file, rows);
+                months.Add(match.Groups[1].Value);
+            }
+            finally
+            {
+                gate.Release();
+            }
+        }
+
+        return months;
+    }
+
+    /// <summary>
+    /// 월 요약 파일을 삭제한다.
+    /// month(yyyy-MM)를 입력으로 사용하며 삭제했으면 true를 반환한다.
+    /// </summary>
+    public bool DeleteMonth(string month)
+    {
+        string path = Path.Combine(SummaryDirectory, month + ".csv");
+        if (!File.Exists(path))
+        {
+            return false;
+        }
+
+        SemaphoreSlim gate = FileLocks.Get(path);
+        gate.Wait();
+        try
+        {
+            if (!File.Exists(path))
+            {
+                return false;
+            }
+
+            File.Delete(path);
+            return true;
+        }
+        finally
+        {
+            gate.Release();
+        }
+    }
+
+    /// <summary>
+    /// 요약 행 목록을 헤더와 함께 파일로 교체 기록한다.
+    /// path와 rows를 사용하며 임시 파일 쓰기 후 교체로 저장한다. rows의 0번은 헤더로 건너뛴다.
+    /// </summary>
+    private void WriteSummaryFile(string path, List<string[]> rows)
+    {
+        StringBuilder builder = new StringBuilder();
+        builder.Append(SUMMARY_HEADER).Append(CRLF);
+        for (int i = 1; i < rows.Count; i++)
+        {
+            builder.Append(JoinRow(rows[i])).Append(CRLF);
+        }
+
+        string temp = path + ".tmp";
+        File.WriteAllText(temp, builder.ToString(), _utf8Bom);
+        File.Move(temp, path, true);
+    }
+
+    /// <summary>
+    /// 월 요약 파일을 읽어 세션 목록으로 변환한다.
+    /// month(yyyy-MM)를 입력으로 사용하며 파일이 없으면 빈 목록을 반환한다.
+    /// </summary>
+    private List<SessionRow> ReadMonthRows(string month)
+    {
+        string path = Path.Combine(SummaryDirectory, month + ".csv");
+        if (!File.Exists(path))
+        {
+            return new List<SessionRow>();
+        }
+
+        List<SessionRow> sessions = new();
+        foreach (string[] cells in CsvText.ParseRows(File.ReadAllText(path)))
+        {
+            SessionRow? row = ToSessionRow(cells);
+            if (row != null)
+            {
+                sessions.Add(row);
+            }
+        }
+
+        return sessions;
+    }
+
+    /// <summary>
+    /// 요약 CSV 한 행을 세션 목록 항목으로 변환한다.
+    /// cells를 입력으로 사용하며 헤더 행이거나 열 수가 모자라면 null을 반환한다.
+    /// </summary>
+    private static SessionRow? ToSessionRow(string[] cells)
+    {
+        if (cells.Length < COLUMN_COUNT || cells[0] == "session_id")
+        {
+            return null;
+        }
+
+        return new SessionRow
+        {
+            SessionId = cells[0],
+            DateUtc = cells[1],
+            DurationSec = ParseDouble(cells[2]),
+            EndedCleanly = string.Equals(cells[3], "true", StringComparison.OrdinalIgnoreCase),
+            Total = ParseInt(cells[4]),
+            Warnings = ParseInt(cells[5]),
+            Errors = ParseInt(cells[6]),
+            Exceptions = ParseInt(cells[7]),
+            IsEditor = string.Equals(cells[8], "true", StringComparison.OrdinalIgnoreCase),
+            Platform = cells[9],
+            AppVersion = cells[10],
+        };
+    }
+
+    /// <summary>정수 필드를 관대하게 읽는다. 형식이 틀리면 0을 반환한다.</summary>
+    private static int ParseInt(string text)
+    {
+        return int.TryParse(text, NumberStyles.Integer, CultureInfo.InvariantCulture, out int value) ? value : 0;
+    }
+
+    /// <summary>실수 필드를 관대하게 읽는다. 형식이 틀리면 0을 반환한다.</summary>
+    private static double ParseDouble(string text)
+    {
+        return double.TryParse(text, NumberStyles.Float, CultureInfo.InvariantCulture, out double value) ? value : 0.0;
     }
 
     /// <summary>
@@ -211,74 +450,5 @@ public sealed class SessionSummary
         }
 
         return builder.ToString();
-    }
-
-    /// <summary>
-    /// 요약 CSV 텍스트를 RFC 4180 규칙으로 읽어 행 목록으로 만든다. 인용 필드 안의 개행과 쉼표를 존중한다.
-    /// text를 입력으로 사용하며 비어 있지 않은 행만 담은 목록을 반환한다.
-    /// </summary>
-    private static List<string[]> ParseRows(string text)
-    {
-        List<string[]> rows = new();
-        List<string> fields = new();
-        StringBuilder field = new StringBuilder();
-        bool quoted = false;
-
-        for (int i = 0; i < text.Length; i++)
-        {
-            char c = text[i];
-            if (quoted)
-            {
-                if (c == '"')
-                {
-                    if (i + 1 < text.Length && text[i + 1] == '"')
-                    {
-                        field.Append('"');
-                        i++;
-                    }
-                    else
-                    {
-                        quoted = false;
-                    }
-                }
-                else
-                {
-                    field.Append(c);
-                }
-
-                continue;
-            }
-
-            switch (c)
-            {
-                case '"':
-                    quoted = true;
-                    break;
-                case ',':
-                    fields.Add(field.ToString());
-                    field.Clear();
-                    break;
-                case '\r':
-                    break;
-                case '\n':
-                    fields.Add(field.ToString());
-                    field.Clear();
-                    rows.Add(fields.ToArray());
-                    fields.Clear();
-                    break;
-                default:
-                    field.Append(c);
-                    break;
-            }
-        }
-
-        if (field.Length > 0 || fields.Count > 0)
-        {
-            fields.Add(field.ToString());
-            rows.Add(fields.ToArray());
-        }
-
-        rows.RemoveAll(row => row.Length == 0 || (row.Length == 1 && row[0].Length == 0));
-        return rows;
     }
 }
