@@ -72,6 +72,11 @@ tr.xrow td { background: #0d1117; white-space: normal; }
 tr.xrow pre { margin: 4px 0; padding: 8px; background: #161b22; border: 1px solid var(--border);
   border-radius: 6px; overflow: auto; max-height: 260px; font: 11.5px/1.5 Consolas, monospace; white-space: pre-wrap; }
 .xlabel { color: var(--muted); font-size: 11px; display: block; margin-top: 6px; }
+.chip { display: inline-block; background: #0d1117; border: 1px solid var(--border); border-radius: 12px;
+  padding: 2px 10px; margin: 2px 4px 2px 0; font-size: 12px; color: var(--muted); }
+.chip b { color: var(--text); font-weight: 600; }
+.chip.rate { border-color: var(--accent); }
+.chip.rate b { color: var(--accent); }
 .empty { padding: 18px; text-align: center; color: var(--muted); }
 h2 { font-size: 14px; margin: 0; font-family: Consolas, monospace; }
 nav { display: flex; align-items: center; gap: 8px; }
@@ -96,6 +101,7 @@ nav { display: flex; align-items: center; gap: 8px; }
       <button id="delmonth" class="danger">이 달 전체 삭제</button>
     </div>
     <div id="monthstats" class="stats"></div>
+    <div id="monthmetrics" class="row"></div>
   </section>
 
   <section class="card">
@@ -128,6 +134,7 @@ nav { display: flex; align-items: center; gap: 8px; }
       <button id="dclose">닫기</button>
     </div>
     <div id="dmeta" class="stats"></div>
+    <div id="dmetrics"></div>
     <div class="row">
       <label class="chk"><input type="checkbox" id="lv-Info" checked> Info</label>
       <label class="chk"><input type="checkbox" id="lv-Warning" checked> Warning</label>
@@ -196,6 +203,28 @@ function download(path) {
   location.href = path + sep + "key=" + encodeURIComponent(getKey());
 }
 function num(n) { return Number(n || 0).toLocaleString(); }
+function fmtNum(n) {
+  return Number(n || 0).toLocaleString(undefined, { maximumFractionDigits: 2 });
+}
+function rateText(d) {
+  return d.value == null ? "–" : (d.value * 100).toFixed(1) + (d.unit || "%");
+}
+
+async function loadMonthMetrics() {
+  const el = $("monthmetrics");
+  if (!state.month) { el.innerHTML = ""; return; }
+  const data = await (await api("/api/metrics?month=" + state.month)).json();
+  let html = "";
+  for (const d of data.derived) {
+    html += '<span class="chip rate"><b>' + esc(d.name) + "</b> " + rateText(d) + "</span>";
+  }
+  for (const m of data.metrics.slice(0, 12)) {
+    html += '<span class="chip"><b>' + esc(m.key) + "</b> " + num(m.count) + "회"
+      + (m.sum ? " · 합계 " + fmtNum(m.sum) : "") + "</span>";
+  }
+  el.innerHTML = html
+    || '<span class="muted">이 달에 집계된 플레이 지표가 없습니다 — 클라이언트에서 GameLogger.Count/Measure를 호출하면 표시됩니다.</span>';
+}
 
 async function loadMonths(keep) {
   const data = await (await api("/api/months")).json();
@@ -233,6 +262,7 @@ async function loadSessions() {
   const data = await (await api("/api/sessions?" + p)).json();
   state.session = null;
   $("detail").hidden = true;
+  $("dmetrics").innerHTML = "";
   const body = $("sbody");
   body.innerHTML = "";
   $("sempty").hidden = data.sessions.length > 0;
@@ -258,6 +288,7 @@ async function loadSessions() {
     };
     body.appendChild(tr);
   }
+  await loadMonthMetrics();
 }
 
 async function openSession(id) {
@@ -302,6 +333,22 @@ async function loadDetail() {
     : (state.offset + 1) + "–" + (state.offset + data.returned) + " / " + num(data.matched);
   $("dprev").disabled = state.offset <= 0;
   $("dnext").disabled = state.offset + data.returned >= data.matched;
+
+  let metricsHtml = "";
+  if (data.derived && data.derived.length) {
+    metricsHtml += '<div class="row">' + data.derived.map((d) =>
+      '<span class="chip rate"><b>' + esc(d.name) + "</b> " + rateText(d) + '</span>').join("") + "</div>";
+  }
+  if (data.metrics && data.metrics.length) {
+    let rows = "";
+    for (const m of data.metrics) {
+      rows += "<tr><td>" + esc(m.key) + "</td><td>" + num(m.count) + "</td><td>"
+        + (m.count ? fmtNum(m.avg) : "–") + "</td><td>" + fmtNum(m.sum) + "</td></tr>";
+    }
+    metricsHtml += '<div class="tablewrap" style="max-height:200px"><table>'
+      + '<thead><tr><th>지표</th><th>횟수</th><th>평균</th><th>합계</th></tr></thead><tbody>' + rows + "</tbody></table></div>";
+  }
+  $("dmetrics").innerHTML = metricsHtml;
 
   const body = $("ebody");
   body.innerHTML = "";

@@ -12,11 +12,13 @@ logkit/
 ## 데이터 흐름
 
 ```
-Play 중 수집 → 5초마다 로컬 JSONL → 게임 종료 시 gzip POST
-→ 서버 검증(크기·키·gzip·JSON) → 세션 CSV 교체 + 월별 요약 upsert + raw 보존
-→ 클라이언트로 요약 JSON 응답 (실패 시 클라이언트가 .pending 보존 후 다음 기동 재전송)
+Play 중 수집 → 5초마다 백그라운드 워커가 로컬 JSONL 기록 → 게임 종료 시 20,000건 단위 파트로 분할 gzip POST
+→ 서버 검증(크기·키·gzip·JSON) → 파트별 저장 + 통합 CSV 재구성 + 월별 요약 재계산 + raw 보존
+→ 클라이언트로 요약 JSON 응답 (실패 시 클라이언트가 .pending 보존 후 다음 기동 재전송 — 파트 전체 재전송, 서버 병합은 멱등)
 
-서버 브라우저(/) 열람 → 월별 세션 목록 · 항목 검색 · CSV/raw 내려받기 · 세션/월 삭제
+Count/Measure로 모은 플레이 지표(공격 횟수 등)는 배치와 함께 전송 → 세션·월 단위 집계 + 명중률 같은 파생 지표 자동 계산
+
+서버 브라우저(/) 열람 → 월별 세션 목록 · 항목 검색 · 지표 집계 · CSV/raw 내려받기 · 세션/월 삭제
 ```
 
 ## 유니티 패키지 설치
@@ -40,6 +42,11 @@ using LogKit;
 GameLogger.Info("Combat", "보스 격파");
 GameLogger.Warn("System", "메모리 부족");
 GameLogger.Data("Info", "Run", "런 종료", new RunData { Score = 1200 });
+
+// 플레이 지표 — 서버가 세션·월 단위로 집계하고 appsettings의 DerivedMetrics로 명중률까지 계산한다
+GameLogger.Count("Attack");          // 공격 시도 +1
+GameLogger.Count("AttackHit");       // 명중 +1
+GameLogger.Measure("ComboLength", 5); // 콤보 길이 기록(횟수 + 합계 → 평균 자동 계산)
 ```
 
 설정은 씬에 `GameLogger` 컴포넌트를 배치해 Inspector에서 덮어쓸 수 있다(없으면 코드 기본값).
@@ -50,13 +57,14 @@ GameLogger.Data("Info", "Run", "런 종료", new RunData { Score = 1200 });
 | Release Server Url | `http://localhost:5000/api/logs` | 일반 빌드에서 사용 |
 | Api Key | `dev-log-key` | 서버 `ApiKey`와 일치해야 한다 |
 | Capture Unity Logs | true | `Debug.Log` 계열 자동 캡처 |
-| Max Entries Per Session | 20000 | 세션당 캡처 상한(초과분은 버리고 마커 1건) |
+| Max Entries Per Session | 100000 | 세션당 캡처 상한(총량 기준, 0 이하는 무제한). 초과분은 버리고 마커 1건. 전송은 20,000건씩 파트로 나눠 모두 보낸다 |
 | Flush Interval Seconds | 5 | 큐 → 로컬 파일 기록 주기 |
 | Upload On Quit | true | 종료 시 전송 |
 | Retry Pending On Startup | true | 기동 시 미전송 파일 재전송 |
 | Request Timeout Seconds | 5 | HTTP 타임아웃 |
 
-- 로컬 버퍼: `Application.persistentDataPath/Logs/{세션ID}.jsonl` (전송 성공 시 삭제)
+- 로컬 버퍼: `Application.persistentDataPath/Logs/{세션ID}.jsonl` + `{세션ID}.metrics.json` (전송 성공 시 함께 삭제)
+- 파일 기록은 메인 스레드가 아닌 전용 워커 스레드가 담당한다. Update는 신호만 보낸다.
 - 대상 플랫폼: Windows 스탠드얼론(에디터 포함). WebGL은 스레드·동기 HTTP 제약으로 미지원
 
 ## 수신 서버 실행 (server/)

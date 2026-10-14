@@ -9,19 +9,23 @@ namespace LogKit
 {
 
     /// <summary>
-    /// 세션 로그를 JSONL 파일로 기록하고 업로드용 배치로 다시 읽는다.
-    /// 로그 디렉터리와 세션 ID를 사용하며, 파일 생성·추가·pending 및 corrupt 전환을 담당한다.
+    /// 세션 로그를 JSONL 파일로 기록하고 업로드용 청크로 다시 읽는다.
+    /// 로그 디렉터리와 세션 ID를 사용하며, 파일 생성·추가·지표 파일 기록·pending 및 corrupt 전환을 담당한다.
     /// </summary>
     public class LogFileWriter
     {
         private const string FILE_EXTENSION = ".jsonl";
         private const string PENDING_SUFFIX = ".pending";
         private const string CORRUPT_SUFFIX = ".corrupt";
+        private const string METRICS_SUFFIX = ".metrics.json";
 
         private readonly string _filePath;
         private readonly object _writeLock = new object();
 
         public string CurrentFilePath => _filePath;
+
+        /// <summary>현재 세션의 지표 파일 전체 경로.</summary>
+        public string MetricsFilePath => GetMetricsPathFor(_filePath);
 
         /// <summary>
         /// 작성기를 준비한다.
@@ -65,6 +69,22 @@ namespace LogKit
         }
 
         /// <summary>
+        /// 세션 지표 스냄샷을 지표 파일로 교체 기록한다.
+        /// metrics를 사용하며, 비어 있으면 아무것도 하지 않는다.
+        /// </summary>
+        public void WriteMetrics(MetricSample[] metrics)
+        {
+            if (metrics == null || metrics.Length == 0)
+                return;
+
+            MetricSnapshot snapshot = new MetricSnapshot { metrics = metrics };
+            lock (_writeLock)
+            {
+                File.WriteAllText(MetricsFilePath, JsonUtility.ToJson(snapshot));
+            }
+        }
+
+        /// <summary>
         /// 업로드 대상이 될 수 있는 파일 경로 목록을 반환한다.
         /// 로그 디렉터리와 현재 세션 ID를 사용하며, 현재 세션 파일을 제외한 남은 세션 파일과 pending 파일을 포함한다.
         /// </summary>
@@ -89,59 +109,109 @@ namespace LogKit
         }
 
         /// <summary>
-        /// 세션 파일을 읽어 업로드 배치로 조립한다.
-        /// 파일 경로와 정상 종료 여부, 항목 상한을 사용하며, 읽기에 실패하면 false를 반환한다.
+        /// 로그 파일 경로에 대응하는 지표 파일 경로를 돌려준다.
+        /// 로그 파일 경로(pending 이름도 허용)를 입력으로 사용하며 지표 파일 경로를 반환한다.
         /// </summary>
-        public static bool TryReadBatch(string filePath, bool endedCleanly, int maxEntries, out UploadBatch batch)
+        public static string GetMetricsPathFor(string logFilePath)
         {
-            batch = null;
+            string basePath = logFilePath;
+            if (basePath.EndsWith(PENDING_SUFFIX, StringComparison.Ordinal))
+                basePath = basePath.Substring(0, basePath.Length - PENDING_SUFFIX.Length);
+            if (basePath.EndsWith(FILE_EXTENSION, StringComparison.Ordinal))
+                basePath = basePath.Substring(0, basePath.Length - FILE_EXTENSION.Length);
+            return basePath + METRICS_SUFFIX;
+        }
+
+        /// <summary>
+        /// 지표 파일을 읽어 샘플 배열로 돌려준다.
+        /// 지표 파일 경로를 입력으로 사용하며, 파일이 없거나 파싱에 실패하면 false와 빈 배열을 반환한다.
+        /// </summary>
+        public static bool TryReadMetrics(string metricsFilePath, out MetricSample[] metrics)
+        {
+            metrics = new MetricSample[0];
             try
             {
-                string[] lines = File.ReadAllLines(filePath);
-                if (lines.Length == 0)
+                if (!File.Exists(metricsFilePath))
                     return false;
 
-                LogSessionHeader header = JsonUtility.FromJson<LogSessionHeader>(lines[0]);
-                if (header == null || string.IsNullOrEmpty(header.sessionId))
+                MetricSnapshot snapshot = JsonUtility.FromJson<MetricSnapshot>(File.ReadAllText(metricsFilePath));
+                if (snapshot?.metrics == null)
                     return false;
 
-                List<LogEntry> entries = new List<LogEntry>();
-                bool truncated = false;
-                for (int i = 1; i < lines.Length; i++)
-                {
-                    if (string.IsNullOrWhiteSpace(lines[i]))
-                        continue;
-                    if (entries.Count >= maxEntries)
-                    {
-                        truncated = true;
-                        break;
-                    }
-
-                    LogEntry entry = JsonUtility.FromJson<LogEntry>(lines[i]);
-                    if (entry == null)
-                        continue;
-                    Normalize(entry);
-                    entries.Add(entry);
-                }
-
-                batch = new UploadBatch
-                {
-                    sessionId = header.sessionId,
-                    startedAtUtc = header.startedAtUtc,
-                    endedAtUtc = entries.Count > 0 ? entries[entries.Count - 1].timestampUtc : DateTime.UtcNow.ToString("o"),
-                    appVersion = header.appVersion,
-                    unityVersion = header.unityVersion,
-                    isEditor = header.isEditor,
-                    platform = header.platform,
-                    endedCleanly = endedCleanly,
-                    truncated = truncated,
-                    entries = entries.ToArray()
-                };
+                metrics = snapshot.metrics;
                 return true;
             }
             catch
             {
-                batch = null;
+                metrics = new MetricSample[0];
+                return false;
+            }
+        }
+
+        /// <summary>
+        /// 세션 파일에서 첫 줄 헤더와 항목 줄을 건너뛴 위치부터 최대 take개의 항목을 읽는다.
+        /// 파일 경로와 건너뛸 항목 수, 가져올 항목 수, 이전 호출에서 얻은 헤더를 입력으로 사용하며,
+        /// 읽기 성공 여부와 항목 배열, 파일 끝에 도달했는지를 반환한다. 읽기에 실패하면 false를 반환한다.
+        /// </summary>
+        public static bool TryReadChunk(string filePath, int skip, int take, ref LogSessionHeader header, out LogEntry[] entries, out bool reachedEnd)
+        {
+            entries = new LogEntry[0];
+            reachedEnd = true;
+            try
+            {
+                List<LogEntry> buffer = new List<LogEntry>(Math.Max(0, take));
+                int entryIndex = 0;
+                bool sawHeader = false;
+                using (IEnumerator<string> lines = File.ReadLines(filePath).GetEnumerator())
+                {
+                    while (lines.MoveNext())
+                    {
+                        string line = lines.Current;
+                        if (!sawHeader)
+                        {
+                            sawHeader = true;
+                            if (header == null)
+                            {
+                                header = JsonUtility.FromJson<LogSessionHeader>(line);
+                                if (header == null || string.IsNullOrEmpty(header.sessionId))
+                                    return false;
+                            }
+                            continue;
+                        }
+                        if (string.IsNullOrWhiteSpace(line))
+                            continue;
+                        if (entryIndex < skip)
+                        {
+                            entryIndex++;
+                            continue;
+                        }
+                        if (buffer.Count >= take)
+                        {
+                            reachedEnd = false;
+                            break;
+                        }
+
+                        LogEntry entry = JsonUtility.FromJson<LogEntry>(line);
+                        if (entry != null)
+                        {
+                            Normalize(entry);
+                            buffer.Add(entry);
+                        }
+                        entryIndex++;
+                    }
+                }
+
+                if (!sawHeader)
+                    return false;
+                if (buffer.Count < take)
+                    reachedEnd = true;
+                entries = buffer.ToArray();
+                return true;
+            }
+            catch
+            {
+                entries = new LogEntry[0];
+                reachedEnd = true;
                 return false;
             }
         }
@@ -165,7 +235,7 @@ namespace LogKit
         }
 
         /// <summary>
-        /// 보존 기간이 지난 pending 파일을 삭제한다.
+        /// 보존 기간이 지난 pending 파일과 지표 파일을 삭제한다.
         /// 로그 디렉터리와 보존 일수를 사용하며, 기준이 지난 파일만 제거한다.
         /// </summary>
         public static void PruneExpiredFiles(string logDirectory, int retentionDays)
@@ -174,11 +244,20 @@ namespace LogKit
                 return;
 
             DateTime threshold = DateTime.UtcNow.AddDays(-retentionDays);
-            foreach (string path in Directory.GetFiles(logDirectory, "*" + FILE_EXTENSION + PENDING_SUFFIX))
+            string[] searchPatterns =
             {
-                if (File.GetLastWriteTimeUtc(path) >= threshold)
-                    continue;
-                TryDeleteFile(path);
+                "*" + FILE_EXTENSION + PENDING_SUFFIX,
+                "*" + METRICS_SUFFIX,
+                "*" + METRICS_SUFFIX + PENDING_SUFFIX,
+            };
+            foreach (string searchPattern in searchPatterns)
+            {
+                foreach (string path in Directory.GetFiles(logDirectory, searchPattern))
+                {
+                    if (File.GetLastWriteTimeUtc(path) >= threshold)
+                        continue;
+                    TryDeleteFile(path);
+                }
             }
         }
 

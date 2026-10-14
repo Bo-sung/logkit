@@ -26,6 +26,27 @@ public sealed class ServerOptions
 
     /// <summary>raw 보존 일수. 기동 시 경과분을 삭제한다.</summary>
     public int RawRetentionDays { get; set; } = 90;
+
+    /// <summary>두 지표의 몫으로 계산하는 파생 지표 목록(공격 명중률 등). 비어 있으면 계산하지 않는다.</summary>
+    public List<DerivedMetricOptions> DerivedMetrics { get; set; } = new();
+}
+
+/// <summary>
+/// 파생 지표 한 줄 설정. 분자·분모 지표 키의 몫을 name으로 제공한다.
+/// </summary>
+public sealed class DerivedMetricOptions
+{
+    /// <summary>파생 지표 이름(예: 공격 명중률).</summary>
+    public string Name { get; set; } = string.Empty;
+
+    /// <summary>분자 지표 키(예: AttackHit).</summary>
+    public string Numerator { get; set; } = string.Empty;
+
+    /// <summary>분모 지표 키(예: Attack).</summary>
+    public string Denominator { get; set; } = string.Empty;
+
+    /// <summary>표기 단위. 기본 %.</summary>
+    public string Unit { get; set; } = "%";
 }
 
 /// <summary>
@@ -40,9 +61,15 @@ public sealed class UploadResponse
     /// <summary>CSV에 기록한 로그 행 수.</summary>
     public int Accepted { get; set; }
 
-    /// <summary>동일 sessionId 파일이 이미 있어 교체된 경우 true. 신규 응답에서는 직렬화하지 않는다.</summary>
+    /// <summary>동일 파트 파일이 이미 있어 교체된 경우 true. 신규 응답에서는 직렬화하지 않는다.</summary>
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public bool? Replaced { get; set; }
+
+    /// <summary>이번 요청의 파트 번호.</summary>
+    public int PartIndex { get; set; }
+
+    /// <summary>서버가 보유한 세션 파트 수.</summary>
+    public int PartsStored { get; set; }
 
     /// <summary>정제·집계한 세션 요약. 클라이언트가 전송 즉시 처리 결과를 확인할 수 있게 한다.</summary>
     public UploadSummary Summary { get; set; } = new UploadSummary();
@@ -123,6 +150,7 @@ public static class Program
         app.MapGet("/api/sessions/{sessionId}", HandleSessionDetail);
         app.MapGet("/api/sessions/{sessionId}/csv", HandleSessionCsv);
         app.MapGet("/api/sessions/{sessionId}/raw", HandleSessionRaw);
+        app.MapGet("/api/metrics", HandleMonthMetrics);
         app.MapDelete("/api/sessions/{sessionId}", HandleDeleteSession);
         app.MapDelete("/api/months/{month}", HandleDeleteMonth);
         app.MapGet("/api/summary/{month}.csv", HandleSummary);
@@ -133,8 +161,9 @@ public static class Program
     }
 
     /// <summary>
-    /// POST /api/logs 처리기. 본문 크기 검사 후 gzip 해제, JSON 역직렬화, 세션 CSV 교체 기록, raw 보존, 요약 upsert를 수행한다.
-    /// context의 본문과 헤더를 사용하며 신규는 202, 동일 세션 교체는 200 응답과 sessionId, accepted 건수를 반환한다.
+    /// POST /api/logs 처리기. 본문 크기 검사 후 gzip 해제, JSON 역직렬화, 파트 저장, raw 보존, 요약 재계산을 수행한다.
+    /// context의 본문과 헤더를 사용하며 긴 세션은 partIndex로 나눠 도착한다. 신규 파트는 202,
+    /// 같은 파트 재전송은 200 응답과 sessionId, accepted 건수, 보유 파트 수를 반환한다.
     /// </summary>
     private static async Task<IResult> HandleUploadAsync(
         HttpContext context,
@@ -174,19 +203,24 @@ public static class Program
             return Results.BadRequest(new { error = "missing or invalid sessionId" });
         }
 
-        bool replaced = sessionStore.SaveSession(batch);
-        sessionStore.SaveRaw(batch.SessionId, body, bodyIsGzip);
-        _ = summary.Upsert(batch);
+        if (batch.PartIndex < 0 || batch.PartIndex > 9999)
+        {
+            return Results.BadRequest(new { error = "invalid partIndex" });
+        }
+
+        (bool replaced, int knownParts) = sessionStore.SavePart(batch, body, bodyIsGzip);
+        UploadSummary info = summary.UpsertSession(batch.SessionId, sessionStore) ?? new UploadSummary();
 
         int accepted = batch.Entries?.Length ?? 0;
-        UploadSummary info = summary.Describe(batch);
         Console.WriteLine(
-            $"upload session={batch.SessionId} entries={accepted} replaced={replaced} month={info.Month} gzip={bodyIsGzip}");
+            $"upload session={batch.SessionId} part={batch.PartIndex}/{knownParts} entries={accepted} replaced={replaced} month={info.Month} gzip={bodyIsGzip}");
 
         UploadResponse response = new()
         {
             SessionId = batch.SessionId,
             Accepted = accepted,
+            PartIndex = batch.PartIndex,
+            PartsStored = knownParts,
             Replaced = replaced ? true : null,
             Summary = info,
         };
@@ -276,6 +310,7 @@ public static class Program
         string? q,
         string? offset,
         string? limit,
+        ServerOptions options,
         CsvSessionStore store,
         SessionSummary summary)
     {
@@ -299,6 +334,8 @@ public static class Program
         (int matched, List<LogEntry> page) = SessionQuery.Filter(
             entries, levelSet, category ?? string.Empty, scene ?? string.Empty, q ?? string.Empty, parsedOffset, parsedLimit);
 
+        Dictionary<string, (long Count, double Sum)> metricMap = MetricMath.ToMap(store.ReadMetrics(sessionId));
+
         return Results.Json(new SessionDetailResponse
         {
             SessionId = sessionId,
@@ -318,6 +355,8 @@ public static class Program
             Returned = page.Count,
             Offset = parsedOffset,
             Entries = page,
+            Metrics = MetricMath.ToStats(metricMap),
+            Derived = MetricMath.Evaluate(options.DerivedMetrics, metricMap),
         }, _jsonOptions);
     }
 
@@ -349,7 +388,7 @@ public static class Program
             return Results.BadRequest(new { error = "invalid sessionId" });
         }
 
-        byte[]? bytes = store.ReadRawFile(sessionId);
+        byte[]? bytes = store.ReadRawMerged(sessionId);
         return bytes is null
             ? Results.NotFound()
             : Results.File(bytes, "application/gzip", sessionId + ".jsonl.gz");
@@ -416,6 +455,37 @@ public static class Program
             Month = month,
             DeletedSessions = deletedSessions,
             DeletedSummaryFile = deletedSummaryFile,
+        }, _jsonOptions);
+    }
+
+    /// <summary>
+    /// GET /api/metrics 처리기. 월 전체 세션의 플레이 지표를 합산하고 파생 지표를 계산한다.
+    /// month(yyyy-MM)를 입력으로 사용하며, 형식이 틀리면 400, 그 외에는 200과 월 지표 JSON을 반환한다.
+    /// </summary>
+    private static IResult HandleMonthMetrics(
+        string? month,
+        ServerOptions options,
+        CsvSessionStore store,
+        SessionSummary summary)
+    {
+        if (string.IsNullOrEmpty(month) || !_monthPattern.IsMatch(month))
+        {
+            return Results.BadRequest(new { error = "month must be yyyy-MM" });
+        }
+
+        List<SessionRow> sessions = summary.GetMonthSessions(month);
+        Dictionary<string, (long Count, double Sum)> merged = new(StringComparer.Ordinal);
+        foreach (SessionRow session in sessions)
+        {
+            MetricMath.MergeInto(merged, store.ReadMetrics(session.SessionId));
+        }
+
+        return Results.Json(new MonthMetricsResponse
+        {
+            Month = month,
+            Sessions = sessions.Count,
+            Metrics = MetricMath.ToStats(merged),
+            Derived = MetricMath.Evaluate(options.DerivedMetrics, merged),
         }, _jsonOptions);
     }
 

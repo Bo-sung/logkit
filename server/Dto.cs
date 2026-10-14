@@ -2,7 +2,7 @@ namespace LogServer;
 
 /// <summary>
 /// 업로드 봉투. Unity JsonUtility로 직렬화된 UploadBatch와 필드명이 일치하는 요청 모델이다.
-/// sessionId와 로그 항목 배열 entries를 담으며 서버는 이 객체를 읽어 세션 CSV와 요약을 작성한다.
+/// sessionId와 로그 항목 배열 entries를 담으며, 긴 세션은 partIndex로 나눠 여러 번 전송할 수 있다.
 /// </summary>
 public sealed class UploadBatch
 {
@@ -33,8 +33,82 @@ public sealed class UploadBatch
     /// <summary>캡처 상한 초과로 로그를 버렸으면 true.</summary>
     public bool Truncated { get; set; }
 
-    /// <summary>세션 전체 로그 항목. 상한은 클라이언트에서 20,000건으로 제한한다.</summary>
+    /// <summary>0부터 시작하는 배치 파트 번호. 같은 파트 재전송은 교체로 멱등 처리한다.</summary>
+    public int PartIndex { get; set; }
+
+    /// <summary>세션 동안 집계한 플레이 지표. 비어 있으면 서버의 기존 지표를 유지한다.</summary>
+    public MetricSample[] Metrics { get; set; } = System.Array.Empty<MetricSample>();
+
+    /// <summary>이 파트에 담긴 로그 항목. 한 파트 최대 20,000건.</summary>
     public LogEntry[] Entries { get; set; } = System.Array.Empty<LogEntry>();
+}
+
+/// <summary>
+/// 플레이 지표 한 샘플. Count·Measure 호출이 누적한 횟수와 합계다.
+/// </summary>
+public sealed class MetricSample
+{
+    /// <summary>지표 키. 클라이언트 GameLogger.Count·Measure의 key다.</summary>
+    public string Key { get; set; } = string.Empty;
+
+    /// <summary>누적 횟수.</summary>
+    public long Count { get; set; }
+
+    /// <summary>누적 합계. Measure로 기록한 값의 총합이다.</summary>
+    public double Sum { get; set; }
+}
+
+/// <summary>
+/// 세션 메타. 파트가 도착할 때마다 마지막 값으로 갱신되며 요약 재계산 때 세션 헤더로 쓰인다.
+/// </summary>
+public sealed class SessionMeta
+{
+    public string SessionId { get; set; } = string.Empty;
+    public string StartedAtUtc { get; set; } = string.Empty;
+    public string EndedAtUtc { get; set; } = string.Empty;
+    public string AppVersion { get; set; } = string.Empty;
+    public string UnityVersion { get; set; } = string.Empty;
+    public bool IsEditor { get; set; }
+    public string Platform { get; set; } = string.Empty;
+    public bool EndedCleanly { get; set; }
+    public bool Truncated { get; set; }
+}
+
+/// <summary>지표 집계 결과 한 행. 횟수와 평균을 담는다.</summary>
+public sealed class MetricStat
+{
+    /// <summary>지표 키.</summary>
+    public string Key { get; set; } = string.Empty;
+
+    /// <summary>누적 횟수.</summary>
+    public long Count { get; set; }
+
+    /// <summary>누적 합계.</summary>
+    public double Sum { get; set; }
+
+    /// <summary>평균(sum/count). 횟수가 0이면 0.</summary>
+    public double Avg { get; set; }
+}
+
+/// <summary>
+/// 파생 지표 계산 결과. 두 지표의 몫으로 명중률 같은 비율을 담는다.
+/// </summary>
+public sealed class DerivedMetricValue
+{
+    /// <summary>파생 지표 이름(예: 공격 명중률).</summary>
+    public string Name { get; set; } = string.Empty;
+
+    /// <summary>분자 지표 키.</summary>
+    public string Numerator { get; set; } = string.Empty;
+
+    /// <summary>분모 지표 키.</summary>
+    public string Denominator { get; set; } = string.Empty;
+
+    /// <summary>계산값. 분모가 0이면 null.</summary>
+    public double? Value { get; set; }
+
+    /// <summary>표기 단위(기본 %).</summary>
+    public string Unit { get; set; } = "%";
 }
 
 /// <summary>
@@ -199,6 +273,28 @@ public sealed class SessionDetailResponse
 
     /// <summary>조건을 통과한 항목 페이지.</summary>
     public List<LogEntry> Entries { get; set; } = new();
+
+    /// <summary>세션에 집계된 플레이 지표. 횟수 내림차순.</summary>
+    public List<MetricStat> Metrics { get; set; } = new();
+
+    /// <summary>설정된 파생 지표 계산값(명중률 등).</summary>
+    public List<DerivedMetricValue> Derived { get; set; } = new();
+}
+
+/// <summary>GET /api/metrics 응답 본문. 월 전체 세션을 합산한 지표 집계를 담는다.</summary>
+public sealed class MonthMetricsResponse
+{
+    /// <summary>조회한 월 키(yyyy-MM).</summary>
+    public string Month { get; set; } = string.Empty;
+
+    /// <summary>합산에 포함된 세션 수.</summary>
+    public int Sessions { get; set; }
+
+    /// <summary>월 전체 지표 집계. 횟수 내림차순.</summary>
+    public List<MetricStat> Metrics { get; set; } = new();
+
+    /// <summary>설정된 파생 지표 계산값(명중률 등).</summary>
+    public List<DerivedMetricValue> Derived { get; set; } = new();
 }
 
 /// <summary>DELETE /api/sessions/{sessionId} 응답 본문.</summary>

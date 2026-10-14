@@ -3,10 +3,12 @@
 LogKit 유니티 패키지가 전송한 게임 로그를 받아 저장·집계하고, 브라우저에서 열람하는 수신 서버. ASP.NET Core 8 미니멀 API 기반으로 외부 NuGet 의존성이 없다.
 
 ```
-gzip POST 수신 → 검증(크기·gzip·JSON·sessionId) → 세션 CSV 교체 기록
-→ 원문(raw) 보존 → 월별 요약 upsert → 요약 JSON 응답
+gzip POST 수신 → 검증(크기·gzip·JSON·sessionId·partIndex) → 파트별 저장 + 통합 CSV 재구성
+→ 원문(raw) 보존 → 월별 요약 재계산 → 요약 JSON 응답
 
-브라우저 → /dashboard (GM툴) → 월별 세션 목록 · 항목 검색 · CSV/raw 내려받기 · 삭제
+Count/Measure 지표 → sessions/{id}.metrics.csv 저장 → 세션·월 단위 집계 + 파생 지표(명중률) 계산
+
+브라우저 → /dashboard (GM툴) → 월별 세션 목록 · 항목 검색 · 지표 집계 · CSV/raw 내려받기 · 삭제
 ```
 
 ## 실행
@@ -28,6 +30,15 @@ dotnet run        # http://0.0.0.0:5000 에서 대기
 | MaxBodyBytes | 5242880 | gzip 본문 상한(초과 시 413) |
 | KeepRawJsonl | true | 수신 원문을 `data/raw/`에 보존할지 여부 |
 | RawRetentionDays | 90 | raw 보존 일수. 기동 시 경과분을 삭제 |
+| DerivedMetrics | (예시 3건) | 파생 지표 규칙. 분자·분모 지표 키의 몫을 계산한다. 키는 클라이언트 `GameLogger.Count`의 key와 일치 |
+
+```json
+"DerivedMetrics": [
+  { "Name": "공격 명중률", "Numerator": "AttackHit", "Denominator": "Attack", "Unit": "%" },
+  { "Name": "스캔 사용률", "Numerator": "ScanUsed", "Denominator": "Scan", "Unit": "%" },
+  { "Name": "소리 발생원 접근률", "Numerator": "SoundSourceAccessed", "Denominator": "SoundSource", "Unit": "%" }
+]
+```
 
 ## 엔드포인트
 
@@ -37,7 +48,8 @@ dotnet run        # http://0.0.0.0:5000 에서 대기
 | `GET /health` | 불필요 | 200 `ok` | 생존 확인 |
 | `GET /api/months` | 필요 | 200 JSON | 월 목록 + 월별 집계(세션·로그·경고·오류·예외 합계) |
 | `GET /api/sessions?month=` | 필요 | 200 JSON | 월별 세션 목록. `q`(ID·플랫폼·버전 부분 일치), `onlyIssues=true`(문제 세션만), `sort=date\|errors\|total` |
-| `GET /api/sessions/{id}` | 필요 | 200 JSON | 세션 메타 + 로그 항목. `levels`(쉼표 구분), `category`, `scene`, `q`(메시지·데이터·스택 검색), `offset`, `limit`(기본 500, 최대 2000) |
+| `GET /api/sessions/{id}` | 필요 | 200 JSON | 세션 메타 + 로그 항목. `levels`(쉼표 구분), `category`, `scene`, `q`(메시지·데이터·스택 검색), `offset`, `limit`(기본 500, 최대 2000). 응답에 플레이 지표(`metrics`)와 파생 지표(`derived`) 포함 |
+| `GET /api/metrics?month=` | 필요 | 200 JSON | 월 전체 세션의 지표 합산 + 파생 지표(명중률 등) 계산 |
 | `GET /api/sessions/{id}/csv` | 필요 | 200 `text/csv` | 세션 CSV 내려받기 |
 | `GET /api/sessions/{id}/raw` | 필요 | 200 `application/gzip` | 수신 원문 gzip 내려받기 |
 | `DELETE /api/sessions/{id}` | 필요 | 200 JSON | 세션 CSV·raw·요약 행 일괄 삭제(없으면 404) |
@@ -71,7 +83,8 @@ curl -H "X-Api-Key: dev-log-key" http://localhost:5000/api/summary/2026-10.csv
 - **연결**: 첫 화면에서 API 키를 입력하면 localStorage에 저장되어 이후 자동 연결된다.
 - **월 선택**: 월별 집계(세션·로그·경고·오류·예외 합계)를 카드로 표시한다.
 - **세션 목록**: 최신순/오류순/로그 많은순 정렬, ID·플랫폼·버전 검색, 문제 세션만 보기. 행을 클릭하면 상세가 열린다.
-- **세션 상세**: 레벨(Info~Exception) 체크박스, 카테고리·씬·텍스트 필터, 500건 단위 페이지 이동. 항목 행을 클릭하면 메시지 전문·dataJson(정렬됨)·스택트레이스가 펼쳐진다.
+- **세션 상세**: 레벨(Info~Exception) 체크박스, 카테고리·씬·텍스트 필터, 500건 단위 페이지 이동. 항목 행을 클릭하면 메시지 전문·dataJson(정렬됨)·스택트레이스가 펼쳐진다. 하단에 플레이 지표 표와 파생 지표(명중률 등)가 나온다.
+- **월 지표**: 세션 목록 위에 그 달 전체 지표 합계와 파생 지표(공격 명중률 등)가 표시된다(`/api/metrics`).
 - **내려받기/삭제**: 세션 CSV·raw gzip 내려받기, 세션 삭제, 월 전체 삭제(월 키 입력 확인).
 
 ## 대시보드가 없어도 되는 이유
@@ -81,6 +94,7 @@ curl -H "X-Api-Key: dev-log-key" http://localhost:5000/api/summary/2026-10.csv
 ### 업로드 요청 형식
 
 - 본문: gzip 압축(`Content-Encoding: gzip`) 또는 평문 JSON. gzip 해제 실패 시 400.
+- 긴 세션은 20,000건씩 파트로 나뉘며 `partIndex` 순서대로 도착한다.
 - JSON 구조 (`UploadBatch`):
 
 | 필드 | 설명 |
@@ -90,19 +104,27 @@ curl -H "X-Api-Key: dev-log-key" http://localhost:5000/api/summary/2026-10.csv
 | appVersion / unityVersion / platform / isEditor | 실행 환경 정보 |
 | endedCleanly | 정상 종료 여부(강제 종료·크래시면 false) |
 | truncated | 세션 상한 초과로 일부 로그를 버렸는지 여부 |
+| partIndex | 0부터의 파트 번호(9999까지). 긴 세션은 20,000건씩 나뉘며 재전송 시 같은 파트를 다시 보낸다 |
+| metrics[] | 플레이 지표. key·count·sum. 비어 있으면 서버의 기존 지표를 유지 |
 | entries[] | timestampUtc, level, category, scene, message, dataJson, stackTrace |
 
-- 동일 `sessionId`로 재전송하면 세션 CSV를 통째로 교체한다(멱등, 응답에 `replaced: true`).
-- 응답 본문: sessionId, accepted(기록 행 수), 정제 요약(month, durationSec, endedCleanly, total, warnings, errors, exceptions, topCategory).
+- 동일 `partIndex` 재전송은 해당 파트 파일을 교체하고 통합 CSV를 다시 만든다(멱등, 응답에 `replaced: true`).
+- 응답 본문: sessionId, accepted(이번 파트 행 수), partIndex, partsStored(보유 파트 수), 정제 요약(month, durationSec, endedCleanly, total, warnings, errors, exceptions, topCategory).
 
 ## 저장 구조
 
 ```
 {DataPath}/
-├─ sessions/{sessionId}.csv   세션별 로그 전문. 재전송 시 교체(멤등). 행 단위 길이 제한 적용
-├─ summary/{yyyy-MM}.csv      월별 집계. sessionId 키 upsert (시작시각·지속시간·레벨 카운트·에디터 여부 등)
-└─ raw/{sessionId}.jsonl.gz   수신 원문. KeepRawJsonl=false면 미저장, RawRetentionDays 경과 시 기동 중 삭제
+├─ sessions/{sessionId}.csv           파트를 병합한 통합 로그 전문. 행 단위 길이 제한 적용
+├─ sessions/{sessionId}.p0000.csv     파트별 원본 행(재전송 멱등성의 기준). 헤더 없음
+├─ sessions/{sessionId}.meta.json     세션 헤더(시각·버전·플랫폼 등). 마지막 파트 값으로 갱신
+├─ sessions/{sessionId}.metrics.csv   플레이 지표(key,count,sum). 지표가 있는 업로드에서만 갱신
+├─ summary/{yyyy-MM}.csv              월별 집계. sessionId 키 upsert (시작시각·지속시간·레벨 카운트·에디터 여부 등)
+└─ raw/{sessionId}.p0000.jsonl.gz     파트별 수신 원문. KeepRawJsonl=false면 미저장, RawRetentionDays 경과 시 기동 중 삭제
 ```
+
+- `/api/sessions/{id}/raw`는 파트 gzip을 다중 멤버 gzip으로 이어 붙여 돌려준다(`gzip -d`로 그대로 해제된다).
+- 구버전 단일 파일 세션(`{id}.csv`, `{id}.jsonl.gz`)도 조회·삭제·만료 정리가 그대로 동작한다.
 
 - CSV는 RFC 4180 규칙으로 이스케이프하고 개행은 CRLF로 정규화한다. 메시지·dataJson·스택트레이스는 길이 상한을 잘라낸다.
 - 같은 파일에 대한 동시 쓰기는 파일 단위 세마포어로 직렬화하고, 임시 파일 쓰기 후 교체(atomic write)로 저장한다.

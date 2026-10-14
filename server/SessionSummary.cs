@@ -34,54 +34,103 @@ public sealed class SessionSummary
     public string SummaryDirectory => Path.Combine(_options.DataPath, "summary");
 
     /// <summary>
-    /// 수신 배치의 정제 요약 수치를 계산한다.
-    /// batch의 시각과 entries를 사용해 기간·레벨별 건수·최다 카테고리를 담은 UploadSummary를 반환한다.
+    /// 저장된 세션 데이터를 다시 계산해 요약 행과 정제 요약을 만든다.
+    /// sessionId와 저장소를 입력으로 사용하며, 메타 JSON과 통합 CSV에서 기간·레벨별 건수·최다 카테고리를 담은
+    /// SessionRow와 UploadSummary를 반환한다. 세션 데이터가 없으면 null을 반환한다.
     /// </summary>
-    public UploadSummary Describe(UploadBatch batch)
+    public (SessionRow Row, UploadSummary Info)? ComputeSession(string sessionId, CsvSessionStore store)
     {
-        bool hasStart = CsvSessionStore.TryParseUtc(batch.StartedAtUtc, out DateTime startedAtUtc);
-        DateTime reference = hasStart ? startedAtUtc : DateTime.UtcNow;
-        bool hasEnd = CsvSessionStore.TryParseUtc(batch.EndedAtUtc, out DateTime endedAtUtc);
-        double durationSec = hasStart && hasEnd ? Math.Max(0.0, (endedAtUtc - startedAtUtc).TotalSeconds) : 0.0;
-        LogEntry[] entries = batch.Entries ?? System.Array.Empty<LogEntry>();
-        CountLevels(entries, out int warnings, out int errors, out int exceptions);
+        SessionMeta? meta = store.ReadMeta(sessionId);
+        string? csvText = store.ReadSessionCsv(sessionId);
+        if (meta is null && csvText is null)
+        {
+            return null;
+        }
 
-        return new UploadSummary
+        List<LogEntry> entries = csvText is null ? new List<LogEntry>() : SessionQuery.ParseEntries(csvText);
+        bool hasStart = CsvSessionStore.TryParseUtc(meta?.StartedAtUtc, out DateTime startedAtUtc);
+        DateTime reference = hasStart ? startedAtUtc : DateTime.UtcNow;
+        bool hasEnd = CsvSessionStore.TryParseUtc(meta?.EndedAtUtc, out DateTime endedAtUtc);
+        double durationSec = hasStart && hasEnd ? Math.Max(0.0, (endedAtUtc - startedAtUtc).TotalSeconds) : 0.0;
+        CountLevels(entries, out int warnings, out int errors, out int exceptions);
+        string dateUtc = reference.ToString(DATE_FORMAT, CultureInfo.InvariantCulture);
+        double roundedDuration = Math.Round(durationSec, 1);
+
+        SessionRow row = new SessionRow
+        {
+            SessionId = sessionId,
+            DateUtc = dateUtc,
+            DurationSec = roundedDuration,
+            EndedCleanly = meta?.EndedCleanly ?? false,
+            Total = entries.Count,
+            Warnings = warnings,
+            Errors = errors,
+            Exceptions = exceptions,
+            IsEditor = meta?.IsEditor ?? false,
+            Platform = CsvSessionStore.NormalizeNewlines(meta?.Platform),
+            AppVersion = CsvSessionStore.NormalizeNewlines(meta?.AppVersion),
+        };
+
+        UploadSummary info = new UploadSummary
         {
             Month = reference.ToString("yyyy-MM", CultureInfo.InvariantCulture),
-            DateUtc = reference.ToString(DATE_FORMAT, CultureInfo.InvariantCulture),
-            DurationSec = Math.Round(durationSec, 1),
-            EndedCleanly = batch.EndedCleanly,
-            Total = entries.Length,
+            DateUtc = dateUtc,
+            DurationSec = roundedDuration,
+            EndedCleanly = row.EndedCleanly,
+            Total = row.Total,
             Warnings = warnings,
             Errors = errors,
             Exceptions = exceptions,
             TopCategory = FindTopCategory(entries),
         };
+
+        return (row, info);
     }
 
     /// <summary>
-    /// 수신한 배치의 요약 행을 계산해 월별 요약 CSV에서 sessionId 키로 교체 기록한다.
-    /// batch의 시각과 entries를 사용하며, 행이 쓰인 월 키(yyyy-MM)를 반환한다.
+    /// 저장된 세션 데이터를 다시 계산해 월별 요약 CSV의 sessionId 행을 교체(upsert)한다.
+    /// sessionId와 저장소를 입력으로 사용하며, 계산된 UploadSummary를 반환한다.
+    /// 세션이 없으면 null을 반환한다.
     /// </summary>
-    public string Upsert(UploadBatch batch)
+    public UploadSummary? UpsertSession(string sessionId, CsvSessionStore store)
     {
-        UploadSummary info = Describe(batch);
-        string path = Path.Combine(SummaryDirectory, info.Month + ".csv");
-
-        string[] row = new string[COLUMN_COUNT]
+        (SessionRow Row, UploadSummary Info)? computed = ComputeSession(sessionId, store);
+        if (computed is null)
         {
-            batch.SessionId,
-            info.DateUtc,
-            info.DurationSec.ToString("0.0", CultureInfo.InvariantCulture),
-            info.EndedCleanly ? "true" : "false",
-            info.Total.ToString(CultureInfo.InvariantCulture),
-            info.Warnings.ToString(CultureInfo.InvariantCulture),
-            info.Errors.ToString(CultureInfo.InvariantCulture),
-            info.Exceptions.ToString(CultureInfo.InvariantCulture),
-            batch.IsEditor ? "true" : "false",
-            CsvSessionStore.NormalizeNewlines(batch.Platform),
-            CsvSessionStore.NormalizeNewlines(batch.AppVersion),
+            return null;
+        }
+
+        UpsertRow(computed.Value.Row);
+        return computed.Value.Info;
+    }
+
+    /// <summary>
+    /// 세션 요약 행을 월별 요약 CSV의 sessionId 키로 교체 기록한다.
+    /// row를 입력으로 사용하며, 행이 쓰인 월 키(yyyy-MM)를 반환한다.
+    /// </summary>
+    private void UpsertRow(SessionRow row)
+    {
+        if (row.DateUtc.Length < 7)
+        {
+            return;
+        }
+
+        string month = row.DateUtc[..7];
+        string path = Path.Combine(SummaryDirectory, month + ".csv");
+
+        string[] cells = new string[COLUMN_COUNT]
+        {
+            row.SessionId,
+            row.DateUtc,
+            row.DurationSec.ToString("0.0", CultureInfo.InvariantCulture),
+            row.EndedCleanly ? "true" : "false",
+            row.Total.ToString(CultureInfo.InvariantCulture),
+            row.Warnings.ToString(CultureInfo.InvariantCulture),
+            row.Errors.ToString(CultureInfo.InvariantCulture),
+            row.Exceptions.ToString(CultureInfo.InvariantCulture),
+            row.IsEditor ? "true" : "false",
+            CsvSessionStore.NormalizeNewlines(row.Platform),
+            CsvSessionStore.NormalizeNewlines(row.AppVersion),
         };
 
         SemaphoreSlim gate = FileLocks.Get(path);
@@ -96,14 +145,14 @@ public sealed class SessionSummary
                 rows.Add(SUMMARY_HEADER.Split(','));
             }
 
-            int existing = IndexOfSession(rows, batch.SessionId);
+            int existing = IndexOfSession(rows, row.SessionId);
             if (existing >= 0)
             {
-                rows[existing] = row;
+                rows[existing] = cells;
             }
             else
             {
-                rows.Add(row);
+                rows.Add(cells);
             }
 
             WriteSummaryFile(path, rows);
@@ -112,8 +161,6 @@ public sealed class SessionSummary
         {
             gate.Release();
         }
-
-        return info.Month;
     }
 
     /// <summary>
@@ -365,7 +412,7 @@ public sealed class SessionSummary
     /// 로그 항목 중 가장 많은 카테고리를 찾는다.
     /// entries를 입력으로 사용하며, 동률이면 먼저 나온 카테고리를, 항목이 없으면 빈 문자열을 반환한다.
     /// </summary>
-    private static string FindTopCategory(LogEntry[] entries)
+    private static string FindTopCategory(List<LogEntry> entries)
     {
         Dictionary<string, int> counts = new(StringComparer.OrdinalIgnoreCase);
         string best = string.Empty;
@@ -391,7 +438,7 @@ public sealed class SessionSummary
     /// 로그 항목 목록에서 Warning, Error, Assert, Exception 건수를 센다.
     /// entries를 입력으로 사용하며 세 개 합계를 out 파라미터에 저장한다.
     /// </summary>
-    private static void CountLevels(LogEntry[] entries, out int warnings, out int errors, out int exceptions)
+    private static void CountLevels(List<LogEntry> entries, out int warnings, out int errors, out int exceptions)
     {
         warnings = 0;
         errors = 0;
