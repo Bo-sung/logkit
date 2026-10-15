@@ -7,7 +7,7 @@
 Package Manager → `Add package from git URL`:
 
 ```
-https://github.com/Bo-sung/logkit.git?path=package#v0.2.0
+https://github.com/Bo-sung/logkit.git?path=package#v0.2.1
 ```
 
 ## 사용법

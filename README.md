@@ -26,10 +26,10 @@ Count/Measure로 모은 플레이 지표(공격 횟수 등)는 배치와 함께 
 Package Manager → `Add package from git URL`:
 
 ```
-https://github.com/Bo-sung/logkit.git?path=package#v0.2.0
+https://github.com/Bo-sung/logkit.git?path=package#v0.2.1
 ```
 
-- `#v0.2.0` 태그로 버전 고정을 권장한다. 최신이면 태그 부분을 생략한다.
+- `#v0.2.1` 태그로 버전 고정을 권장한다. 최신이면 태그 부분을 생략한다.
 - 오프라인 프로젝트는 `package/` 폴더를 대상 프로젝트의 `Packages/` 아래에 통째로 복사해도 된다(embedded package).
 
 ### 사용법

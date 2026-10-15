@@ -89,6 +89,7 @@ namespace LogKit
         private string _logDirectory;
         private string _sessionId = string.Empty;
         private string _sessionStartedAtUtc = string.Empty;
+        private LogSessionHeader _sessionHeader;
         private string _currentSceneName = string.Empty;
         private bool _truncationMarkQueued;
         private bool _quitFlushTriggered;
@@ -311,7 +312,10 @@ namespace LogKit
             EditorApplication.quitting -= OnEditorQuitting;
     #endif
             StopWriter(500);
-            FlushQueue();
+            // 종료 경로에서 이미 비우고 업로드를 시작했으면 다시 쓰지 않는다.
+            // 업로드가 지운 지표 파일이 다시 만들어져 짝 없는 .metrics.json이 남는 것을 막는다.
+            if (!_quitFlushTriggered)
+                FlushQueue();
         }
 
         void Update()
@@ -352,6 +356,17 @@ namespace LogKit
 
             _sessionId = CreateSessionId();
             _sessionStartedAtUtc = DateTime.UtcNow.ToString("o");
+            // Application.version 등은 메인 스레드에서만 읽을 수 있으므로 헤더를 여기서 미리 만든다.
+            // 세션 파일은 워커 스레드가 처음 만들 수 있다.
+            _sessionHeader = new LogSessionHeader
+            {
+                sessionId = _sessionId,
+                startedAtUtc = _sessionStartedAtUtc,
+                appVersion = Application.version,
+                unityVersion = Application.unityVersion,
+                isEditor = Application.isEditor,
+                platform = Application.platform.ToString()
+            };
             _logDirectory = Path.Combine(Application.persistentDataPath, LOG_DIRECTORY_NAME);
             ConsumeStartupOverrides();
             _uploader = new LogUploader(ResolveServerUrl(), _apiKey, _requestTimeoutSeconds);
@@ -610,26 +625,17 @@ namespace LogKit
 
         /// <summary>
         /// 세션 파일 작성기를 준비한다.
-        /// 최초 호출에서 세션 헤더를 만들고 로그 디렉터리에 파일을 생성한다. 상태 락 안에서 호출한다.
+        /// 최초 호출에서 초기화 때 만든 세션 헤더로 로그 디렉터리에 파일을 생성한다.
+        /// 워커 스레드에서도 불리므로 Unity API를 직접 호출하지 않는다. 상태 락 안에서 호출한다.
         /// </summary>
         private void EnsureSessionFile()
         {
             if (_writer != null)
                 return;
 
-            LogSessionHeader header = new LogSessionHeader
-            {
-                sessionId = _sessionId,
-                startedAtUtc = _sessionStartedAtUtc,
-                appVersion = Application.version,
-                unityVersion = Application.unityVersion,
-                isEditor = Application.isEditor,
-                platform = Application.platform.ToString()
-            };
-
             Directory.CreateDirectory(_logDirectory);
             _writer = new LogFileWriter(_logDirectory, _sessionId);
-            _writer.WriteSession(header);
+            _writer.WriteSession(_sessionHeader);
         }
 
         /// <summary>
