@@ -7,12 +7,13 @@
 Package Manager → `Add package from git URL`:
 
 ```
-https://github.com/Bo-sung/logkit.git?path=package#v0.1.0
+https://github.com/Bo-sung/logkit.git?path=package#v0.2.0
 ```
 
 ## 사용법
 
-부트스트랩은 자동이다. 로그를 남기고 싶은 곳에서 바로 호출한다:
+설치만 하면 자동으로 부트스트랩된다. 첫 씬에 `GameLogger` 컴포넌트를 배치하면
+Inspector 설정을 그대로 쓰고, 없으면 코드 기본값으로 생성된다. 로그는 바로 호출한다:
 
 ```csharp
 using LogKit;
@@ -20,6 +21,11 @@ using LogKit;
 GameLogger.Info("Combat", "보스 격파");
 GameLogger.Warn("System", "낮은 프레임 감지");
 GameLogger.Data("Error", "Run", "런 실패", new FailData { Stage = 3 });
+
+// 인스펙터 대신 코드로 설정을 넣을 때 — 기동 초반에 호출한다 (null 항목은 기존 값 유지)
+GameLogger.Configure(
+    developmentServerUrl: "http://172.21.10.67:5000/api/logs",
+    releaseServerUrl: "http://172.21.10.67:5000/api/logs");
 
 // 플레이 지표 — 서버 대시보드에서 세션·월 단위로 집계된다
 GameLogger.Count("Attack");           // 발생 횟수 +1

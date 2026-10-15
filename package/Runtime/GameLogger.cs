@@ -63,6 +63,23 @@ namespace LogKit
         private static GameLogger _instance;
         private static bool _quitting;
 
+        private static readonly object _configLock = new object();
+        private static Overrides _overrides;
+
+        /// <summary>Configure로 넣은 기동 전 설정. 초기화 때 인스펙터 값 위에 덮어쓰고 비워진다.</summary>
+        private sealed class Overrides
+        {
+            public string DevelopmentServerUrl;
+            public string ReleaseServerUrl;
+            public string ApiKey;
+            public bool? CaptureUnityLogs;
+            public int? MaxEntriesPerSession;
+            public float? FlushIntervalSeconds;
+            public bool? UploadOnQuit;
+            public bool? RetryPendingOnStartup;
+            public int? RequestTimeoutSeconds;
+        }
+
         private readonly object _queueLock = new object();
         private readonly object _stateLock = new object();
         private readonly Queue<LogEntry> _queue = new Queue<LogEntry>();
@@ -94,10 +111,111 @@ namespace LogKit
         /// <summary>
         /// 로그 시스템을 즉시 초기화한다.
         /// 게임 기동 경로에서 호출하며, 초기화 실패는 조용히 무시해 게임을 중단시키지 않는다.
+        /// 보통은 자동 부트스트랩(AutoBootstrap)이 대신하므로 직접 호출은 불필요하다.
         /// </summary>
         public static void Init()
         {
             EnsureInstance();
+        }
+
+        /// <summary>
+        /// 씬 로드가 끝나면 로거를 자동으로 준비한다.
+        /// 씬에 배치된 GameLogger 컴포넌트가 있으면 인스펙터 설정을 그대로 쓰고,
+        /// 없으면 코드 기본값(또는 Configure로 넣은 값)으로 만든다.
+        /// </summary>
+        [RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.AfterSceneLoad)]
+        private static void AutoBootstrap()
+        {
+            EnsureInstance();
+        }
+
+        /// <summary>
+        /// 인스펙터에서 설정하는 값들을 코드로 넣는다.
+        /// 초기화 전에 호출하면 초기화 때 적용되고, 초기화 후에는 살아있는 인스턴스에 즉시 적용된다.
+        /// null(기본값)인 항목은 기존 값(인스펙터 값 또는 코드 기본값)을 유지한다.
+        /// 전송 URL·키는 되도록 기동 초반(씬 오브젝트 Awake 또는 BeforeSplashScreen 단계)에 넣는다.
+        /// </summary>
+        public static void Configure(
+            string developmentServerUrl = null,
+            string releaseServerUrl = null,
+            string apiKey = null,
+            bool? captureUnityLogs = null,
+            int? maxEntriesPerSession = null,
+            float? flushIntervalSeconds = null,
+            bool? uploadOnQuit = null,
+            bool? retryPendingOnStartup = null,
+            int? requestTimeoutSeconds = null)
+        {
+            GameLogger logger = _instance;
+            if (logger != null)
+            {
+                logger.ApplyValues(developmentServerUrl, releaseServerUrl, apiKey, captureUnityLogs,
+                    maxEntriesPerSession, flushIntervalSeconds, uploadOnQuit, retryPendingOnStartup, requestTimeoutSeconds);
+                logger.RebuildUploader();
+                return;
+            }
+
+            lock (_configLock)
+            {
+                if (_overrides == null)
+                    _overrides = new Overrides();
+                if (developmentServerUrl != null) _overrides.DevelopmentServerUrl = developmentServerUrl;
+                if (releaseServerUrl != null) _overrides.ReleaseServerUrl = releaseServerUrl;
+                if (apiKey != null) _overrides.ApiKey = apiKey;
+                if (captureUnityLogs.HasValue) _overrides.CaptureUnityLogs = captureUnityLogs;
+                if (maxEntriesPerSession.HasValue) _overrides.MaxEntriesPerSession = maxEntriesPerSession;
+                if (flushIntervalSeconds.HasValue) _overrides.FlushIntervalSeconds = flushIntervalSeconds;
+                if (uploadOnQuit.HasValue) _overrides.UploadOnQuit = uploadOnQuit;
+                if (retryPendingOnStartup.HasValue) _overrides.RetryPendingOnStartup = retryPendingOnStartup;
+                if (requestTimeoutSeconds.HasValue) _overrides.RequestTimeoutSeconds = requestTimeoutSeconds;
+            }
+        }
+
+        /// <summary>
+        /// null이 아닌 설정 값만 인스턴스 필드에 덮어쓴다.
+        /// Configure(즉시 적용)와 기동 전 오버라이드 소비가 함께 쓴다.
+        /// </summary>
+        private void ApplyValues(string developmentServerUrl, string releaseServerUrl, string apiKey,
+            bool? captureUnityLogs, int? maxEntriesPerSession, float? flushIntervalSeconds,
+            bool? uploadOnQuit, bool? retryPendingOnStartup, int? requestTimeoutSeconds)
+        {
+            if (developmentServerUrl != null) _developmentServerUrl = developmentServerUrl;
+            if (releaseServerUrl != null) _releaseServerUrl = releaseServerUrl;
+            if (apiKey != null) _apiKey = apiKey;
+            if (captureUnityLogs.HasValue) _captureUnityLogs = captureUnityLogs.Value;
+            if (maxEntriesPerSession.HasValue) _maxEntriesPerSession = maxEntriesPerSession.Value;
+            if (flushIntervalSeconds.HasValue) _flushIntervalSeconds = flushIntervalSeconds.Value;
+            if (uploadOnQuit.HasValue) _uploadOnQuit = uploadOnQuit.Value;
+            if (retryPendingOnStartup.HasValue) _retryPendingOnStartup = retryPendingOnStartup.Value;
+            if (requestTimeoutSeconds.HasValue) _requestTimeoutSeconds = requestTimeoutSeconds.Value;
+        }
+
+        /// <summary>현재 필드 값으로 전송기를 다시 만든다. 설정 변경 후 호출한다.</summary>
+        private void RebuildUploader()
+        {
+            lock (_stateLock)
+            {
+                _uploader = new LogUploader(ResolveServerUrl(), _apiKey, _requestTimeoutSeconds);
+            }
+        }
+
+        /// <summary>
+        /// Configure로 기동 전에 넣은 설정을 소비해 필드에 적용한다.
+        /// 초기화 때 호출하며, 소비 후 오버라이드는 비워진다.
+        /// </summary>
+        private void ConsumeStartupOverrides()
+        {
+            lock (_configLock)
+            {
+                Overrides overrides = _overrides;
+                _overrides = null;
+                if (overrides == null)
+                    return;
+
+                ApplyValues(overrides.DevelopmentServerUrl, overrides.ReleaseServerUrl, overrides.ApiKey,
+                    overrides.CaptureUnityLogs, overrides.MaxEntriesPerSession, overrides.FlushIntervalSeconds,
+                    overrides.UploadOnQuit, overrides.RetryPendingOnStartup, overrides.RequestTimeoutSeconds);
+            }
         }
 
         /// <summary>
@@ -235,6 +353,7 @@ namespace LogKit
             _sessionId = CreateSessionId();
             _sessionStartedAtUtc = DateTime.UtcNow.ToString("o");
             _logDirectory = Path.Combine(Application.persistentDataPath, LOG_DIRECTORY_NAME);
+            ConsumeStartupOverrides();
             _uploader = new LogUploader(ResolveServerUrl(), _apiKey, _requestTimeoutSeconds);
 
             Scene activeScene = SceneManager.GetActiveScene();

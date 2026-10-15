@@ -1,6 +1,6 @@
 {
   "name": "com.team.logkit",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "displayName": "LogKit",
   "description": "게임 로그 수집, 로컬 버퍼링, 종료 시 서버 전송 패키지. 수신 서버는 저장소의 server 폴더(ASP.NET Core 8)에서 실행한다.",
   "unity": "6000.0",
