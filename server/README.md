@@ -3,8 +3,9 @@
 LogKit 유니티 패키지가 전송한 게임 로그를 받아 저장·집계하고, 브라우저에서 열람하는 수신 서버. ASP.NET Core 8 미니멀 API 기반으로 외부 NuGet 의존성이 없다.
 
 ```
-gzip POST 수신 → 검증(크기·gzip·JSON·sessionId·partIndex) → 파트별 저장 + 통합 CSV 재구성
-→ 원문(raw) 보존 → 월별 요약 재계산 → 요약 JSON 응답
+gzip POST 수신 → 크기·키만 검사해 data/inbox에 저장 → 즉시 202
+수신함 처리기(백그라운드 1개) → 도착순으로 검증(gzip·JSON·sessionId·partIndex) → 파트별 저장 + 원문(raw) 보존
+→ 이번 바퀴에 건드린 세션마다 통합 CSV 재구성·월별 요약 재계산 한 번
 
 Count/Measure 지표 → sessions/{id}.metrics.csv 저장 → 세션·월 단위 집계 + 파생 지표(명중률) 계산
 
@@ -30,6 +31,7 @@ dotnet run        # http://0.0.0.0:5000 에서 대기
 | MaxBodyBytes | 5242880 | gzip 본문 상한(초과 시 413) |
 | KeepRawJsonl | true | 수신 원문을 `data/raw/`에 보존할지 여부 |
 | RawRetentionDays | 90 | raw 보존 일수. 기동 시 경과분을 삭제 |
+| InboxProcessIntervalSeconds | 2 | 업로드가 오면 이만큼 더 기다렸다가 그사이 도착분까지 한 번에 처리 |
 | DerivedMetrics | (예시 3건) | 파생 지표 규칙. 분자·분모 지표 키의 몫을 계산한다. 키는 클라이언트 `GameLogger.Count`의 key와 일치 |
 
 ```json
@@ -44,7 +46,7 @@ dotnet run        # http://0.0.0.0:5000 에서 대기
 
 | 엔드포인트 | 인증 | 성공 응답 | 설명 |
 | --- | --- | --- | --- |
-| `POST /api/logs` | 필요 | 202(신규) / 200(동일 세션 교체) + 요약 JSON | 로그 업로드 |
+| `POST /api/logs` | 필요 | 202 `{"queued":true}` | 로그 업로드. 수신함에 저장만 하고 처리는 백그라운드 |
 | `GET /health` | 불필요 | 200 `ok` | 생존 확인 |
 | `GET /api/months` | 필요 | 200 JSON | 월 목록 + 월별 집계(세션·로그·경고·오류·예외 합계) |
 | `GET /api/sessions?month=` | 필요 | 200 JSON | 월별 세션 목록. `q`(ID·플랫폼·버전 부분 일치), `onlyIssues=true`(문제 세션만), `sort=date\|errors\|total` |
@@ -93,23 +95,24 @@ curl -H "X-Api-Key: dev-log-key" http://localhost:5000/api/summary/2026-10.csv
 
 ### 업로드 요청 형식
 
-- 본문: gzip 압축(`Content-Encoding: gzip`) 또는 평문 JSON. gzip 해제 실패 시 400.
-- 긴 세션은 20,000건 또는 4MB(압축 전) 단위 파트로 나뉘며 `partIndex` 순서대로 도착한다.
+- 본문: gzip 압축(`Content-Encoding: gzip`) 또는 평문 JSON. 요청 단계에서는 크기(413)와 빈 본문(400)만 검사한다.
+- 클라이언트는 5초마다 새로 쌓인 로그를 다음 `partIndex`로 보낸다. 한 파트는 최대 20,000건 또는 4MB(압축 전)다.
+- 깨진 gzip·JSON, 잘못된 sessionId·partIndex는 처리기가 `data/inbox/failed/`로 옮기고 경고 로그를 남긴다(클라이언트는 이미 202를 받았다).
 - JSON 구조 (`UploadBatch`):
 
 | 필드 | 설명 |
 | --- | --- |
-| sessionId | 파일명으로 쓰인다. 영문·숫자·하이픈·밑줄만 허용(형식 검증 실패 시 400) |
+| sessionId | 파일명으로 쓰인다. 영문·숫자·점·하이픈·밑줄만 허용(형식이 틀리면 failed로 이동) |
 | startedAtUtc / endedAtUtc | 세션 시작·종료 시각(ISO 8601 UTC) |
 | appVersion / unityVersion / platform / isEditor | 실행 환경 정보 |
-| endedCleanly | 정상 종료 여부(강제 종료·크래시면 false) |
+| endedCleanly | 정상 종료 여부. 중간 파트는 false, 정상 종료 시 마무리 파트만 true. 한 파트라도 true면 세션이 정상 종료로 남는다 |
 | truncated | 클라이언트가 일부 로그를 버렸는지 여부. 세션 상한이 없어진 v0.3.0부터 항상 false |
-| partIndex | 0부터의 파트 번호(9999까지). 긴 세션은 20,000건 또는 4MB(압축 전) 단위로 나뉘며 재전송 시 같은 파트를 다시 보낸다 |
+| partIndex | 0부터의 파트 번호(999999까지). 실패한 파트는 같은 번호로 다시 보낸다(그사이 쌓인 줄이 더해질 수 있다) |
 | metrics[] | 플레이 지표. key·count·sum. 비어 있으면 서버의 기존 지표를 유지 |
 | entries[] | timestampUtc, level, category, scene, message, dataJson, stackTrace |
 
-- 동일 `partIndex` 재전송은 해당 파트 파일을 교체하고 통합 CSV를 다시 만든다(멱등, 응답에 `replaced: true`).
-- 응답 본문: sessionId, accepted(이번 파트 행 수), partIndex, partsStored(보유 파트 수), 정제 요약(month, durationSec, endedCleanly, total, warnings, errors, exceptions, topCategory).
+- 동일 `partIndex` 재전송은 해당 파트 파일을 교체한다(멱등). 처리기가 하나라 도착순으로 처리되며 나중에 온 것이 남는다.
+- 응답 본문은 `{"queued":true}`뿐이다. 처리 결과는 서버 콘솔의 `processed session=...` 줄과 대시보드에서 확인한다.
 
 ## 저장 구조
 
@@ -117,7 +120,9 @@ curl -H "X-Api-Key: dev-log-key" http://localhost:5000/api/summary/2026-10.csv
 {DataPath}/
 ├─ sessions/{sessionId}.csv           파트를 병합한 통합 로그 전문. 행 단위 길이 제한 적용
 ├─ sessions/{sessionId}.p0000.csv     파트별 원본 행(재전송 멱등성의 기준). 헤더 없음
-├─ sessions/{sessionId}.meta.json     세션 헤더(시각·버전·플랫폼 등). 마지막 파트 값으로 갱신
+├─ inbox/{틱}_{순번}.json.gz          처리 대기 수신 본문. 처리 후 삭제(서버가 꺼져도 남아 다음 기동에 처리)
+├─ inbox/failed/                      처리할 수 없었던 수신 본문
+├─ sessions/{sessionId}.meta.json     세션 헤더(시각·버전·플랫폼 등). 종료 시각은 최댓값, 정상 종료는 OR로 합침
 ├─ sessions/{sessionId}.metrics.csv   플레이 지표(key,count,sum). 지표가 있는 업로드에서만 갱신
 ├─ summary/{yyyy-MM}.csv              월별 집계. sessionId 키 upsert (시작시각·지속시간·레벨 카운트·에디터 여부 등)
 └─ raw/{sessionId}.p0000.jsonl.gz     파트별 수신 원문. KeepRawJsonl=false면 미저장, RawRetentionDays 경과 시 기동 중 삭제

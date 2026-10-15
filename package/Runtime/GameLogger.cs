@@ -29,14 +29,6 @@ namespace LogKit
         private const string LEVEL_WARNING = "Warning";
         private const string LEVEL_ERROR = "Error";
 
-        /// <summary>한 번의 요청으로 보내는 최대 항목 수. 세션 파일은 이 건수나 아래 용량 중 먼저 닿는 쪽에서 파트를 나눈다.</summary>
-        private const int MAX_BATCH_ENTRIES = 20000;
-
-        /// <summary>
-        /// 한 파트에 담는 항목 JSON의 최대 크기(UTF-8 바이트, 압축 전).
-        /// 압축이 전혀 안 돼도 서버 기본 본문 상한(5MB gzip)을 넘지 않도록 잡는다. 항목 하나가 이보다 크면 그 항목만 단독 파트로 보낸다.
-        /// </summary>
-        private const long MAX_BATCH_BYTES = 4L * 1024 * 1024;
         private const int PENDING_RETENTION_DAYS = 30;
         private const int QUIT_WAIT_MILLISECONDS = 3000;
         private const int QUIT_WRITER_JOIN_MILLISECONDS = 1500;
@@ -56,6 +48,8 @@ namespace LogKit
         [SerializeField] private float _flushIntervalSeconds = 5f;
 
         [Header("전송 설정")]
+        [SerializeField] [Tooltip("플레이 중 새로 쌓인 로그를 서버로 보내는 주기(초). 0 이하로 두면 주기 전송 없이 종료 때만 보낸다.")]
+        private float _uploadIntervalSeconds = 5f;
         [SerializeField] private bool _uploadOnQuit = true;
         [SerializeField] private bool _retryPendingOnStartup = true;
         [SerializeField] private int _requestTimeoutSeconds = 5;
@@ -77,6 +71,7 @@ namespace LogKit
             public bool? UploadOnQuit;
             public bool? RetryPendingOnStartup;
             public int? RequestTimeoutSeconds;
+            public float? UploadIntervalSeconds;
         }
 
         private readonly object _queueLock = new object();
@@ -98,6 +93,12 @@ namespace LogKit
         private AutoResetEvent _flushSignal;
         private Thread _writerThread;
         private volatile bool _stopWriter;
+
+        // 주기 전송은 별도 스레드가 맡아 네트워크 지연이 파일 기록을 막지 않게 한다.
+        private LogShipper _shipper;
+        private AutoResetEvent _shipSignal;
+        private Thread _shipperThread;
+        private volatile bool _stopShipper;
 
         /// <summary>지표 누적기. count는 Interlocked로, sum은 락으로 더한다.</summary>
         private sealed class MetricAccumulator
@@ -141,13 +142,14 @@ namespace LogKit
             float? flushIntervalSeconds = null,
             bool? uploadOnQuit = null,
             bool? retryPendingOnStartup = null,
-            int? requestTimeoutSeconds = null)
+            int? requestTimeoutSeconds = null,
+            float? uploadIntervalSeconds = null)
         {
             GameLogger logger = _instance;
             if (logger != null)
             {
                 logger.ApplyValues(developmentServerUrl, releaseServerUrl, apiKey, captureUnityLogs,
-                    flushIntervalSeconds, uploadOnQuit, retryPendingOnStartup, requestTimeoutSeconds);
+                    flushIntervalSeconds, uploadOnQuit, retryPendingOnStartup, requestTimeoutSeconds, uploadIntervalSeconds);
                 logger.RebuildUploader();
                 return;
             }
@@ -164,6 +166,7 @@ namespace LogKit
                 if (uploadOnQuit.HasValue) _overrides.UploadOnQuit = uploadOnQuit;
                 if (retryPendingOnStartup.HasValue) _overrides.RetryPendingOnStartup = retryPendingOnStartup;
                 if (requestTimeoutSeconds.HasValue) _overrides.RequestTimeoutSeconds = requestTimeoutSeconds;
+                if (uploadIntervalSeconds.HasValue) _overrides.UploadIntervalSeconds = uploadIntervalSeconds;
             }
         }
 
@@ -173,7 +176,7 @@ namespace LogKit
         /// </summary>
         private void ApplyValues(string developmentServerUrl, string releaseServerUrl, string apiKey,
             bool? captureUnityLogs, float? flushIntervalSeconds,
-            bool? uploadOnQuit, bool? retryPendingOnStartup, int? requestTimeoutSeconds)
+            bool? uploadOnQuit, bool? retryPendingOnStartup, int? requestTimeoutSeconds, float? uploadIntervalSeconds)
         {
             if (developmentServerUrl != null) _developmentServerUrl = developmentServerUrl;
             if (releaseServerUrl != null) _releaseServerUrl = releaseServerUrl;
@@ -183,6 +186,7 @@ namespace LogKit
             if (uploadOnQuit.HasValue) _uploadOnQuit = uploadOnQuit.Value;
             if (retryPendingOnStartup.HasValue) _retryPendingOnStartup = retryPendingOnStartup.Value;
             if (requestTimeoutSeconds.HasValue) _requestTimeoutSeconds = requestTimeoutSeconds.Value;
+            if (uploadIntervalSeconds.HasValue) _uploadIntervalSeconds = uploadIntervalSeconds.Value;
         }
 
         /// <summary>현재 필드 값으로 전송기를 다시 만든다. 설정 변경 후 호출한다.</summary>
@@ -209,7 +213,8 @@ namespace LogKit
 
                 ApplyValues(overrides.DevelopmentServerUrl, overrides.ReleaseServerUrl, overrides.ApiKey,
                     overrides.CaptureUnityLogs, overrides.FlushIntervalSeconds,
-                    overrides.UploadOnQuit, overrides.RetryPendingOnStartup, overrides.RequestTimeoutSeconds);
+                    overrides.UploadOnQuit, overrides.RetryPendingOnStartup, overrides.RequestTimeoutSeconds,
+                    overrides.UploadIntervalSeconds);
             }
         }
 
@@ -306,6 +311,7 @@ namespace LogKit
             EditorApplication.quitting -= OnEditorQuitting;
     #endif
             StopWriter(500);
+            StopShipper();
             // 종료 경로에서 이미 비우고 업로드를 시작했으면 다시 쓰지 않는다.
             // 업로드가 지운 지표 파일이 다시 만들어져 짝 없는 .metrics.json이 남는 것을 막는다.
             if (!_quitFlushTriggered)
@@ -340,7 +346,7 @@ namespace LogKit
 
         /// <summary>
         /// 로거를 초기화한다.
-        /// 세션 ID, 로그 디렉터리, 전송기, 파일 기록 워커를 준비하며, 기동 재전송을 시작한다. 중복 호출은 무시한다.
+        /// 세션 ID, 로그 디렉터리, 전송기, 파일 기록 워커와 주기 전송 워커를 준비하며, 기동 재전송을 시작한다. 중복 호출은 무시한다.
         /// </summary>
         private void InitializeLogger()
         {
@@ -372,6 +378,12 @@ namespace LogKit
             _stopWriter = false;
             _writerThread = new Thread(WriterLoop) { IsBackground = true, Name = "LogKit.Writer" };
             _writerThread.Start();
+
+            _shipper = new LogShipper(LogFileWriter.GetSessionFilePath(_logDirectory, _sessionId));
+            _shipSignal = new AutoResetEvent(false);
+            _stopShipper = false;
+            _shipperThread = new Thread(ShipperLoop) { IsBackground = true, Name = "LogKit.Shipper" };
+            _shipperThread.Start();
 
             RetryPendingUploads();
         }
@@ -581,6 +593,44 @@ namespace LogKit
         }
 
         /// <summary>
+        /// 주기 전송 워커 루프를 돈다.
+        /// 전송 주기마다 현재 세션 파일에서 아직 보내지 않은 줄을 서버로 보낸다. 실패하면 다음 주기에 이어서 보낸다.
+        /// 서버가 내용을 거부하면 이 세션의 주기 전송을 멈추고, 마무리는 종료 경로가 맡는다.
+        /// </summary>
+        private void ShipperLoop()
+        {
+            while (!_stopShipper)
+            {
+                float interval = _uploadIntervalSeconds;
+                _shipSignal.WaitOne(interval > 0f ? (int)(interval * 1000f) : WRITER_SIGNAL_POLL_MILLISECONDS * 5);
+                if (_stopShipper)
+                    break;
+                if (interval <= 0f)
+                    continue;
+
+                try
+                {
+                    if (_shipper.Ship(_uploader, false, false) == ShipResult.Rejected)
+                        break;
+                }
+                catch
+                {
+                    // 전송 실패는 다음 주기에 다시 시도한다.
+                }
+            }
+        }
+
+        /// <summary>
+        /// 주기 전송 워커를 멈춘다. 전송 중이면 기다리지 않는다.
+        /// 마무리 전송은 같은 LogShipper의 잠금을 잡으므로 진행 중인 주기 전송과 겹치지 않는다.
+        /// </summary>
+        private void StopShipper()
+        {
+            _stopShipper = true;
+            _shipSignal?.Set();
+        }
+
+        /// <summary>
         /// 누적된 지표를 스냄샷 배열로 복사한다.
         /// 입력값은 없으며, 워커·전송 스레드에서 안전하게 부를 수 있는 샘플 배열을 반환한다.
         /// </summary>
@@ -621,7 +671,7 @@ namespace LogKit
         }
 
         /// <summary>
-        /// 종료 경로에서 워커를 마무리하고 현재 세션 파일 전송을 시작한다.
+        /// 종료 경로에서 워커를 마무리하고 현재 세션의 남은 로그를 마무리 전송한다.
         /// 전송 완료 대기 시간을 사용하며, 중복 호출은 한 번만 수행한다.
         /// </summary>
         private void TriggerQuitFlush(int waitMilliseconds)
@@ -632,16 +682,16 @@ namespace LogKit
 
             StopWriter(QUIT_WRITER_JOIN_MILLISECONDS);
             FlushQueue();
-            if (!_uploadOnQuit || _writer == null)
+            StopShipper();
+            if (!_uploadOnQuit || _writer == null || _shipper == null)
                 return;
 
-            List<string> paths = new List<string> { _writer.CurrentFilePath };
-            StartUploadThread(paths, true, waitMilliseconds);
+            StartUploadThread(new List<LogShipper> { _shipper }, true, waitMilliseconds);
         }
 
         /// <summary>
-        /// 이전 세션의 남은 파일과 pending 파일을 다시 전송한다.
-        /// 보존 기간이 지난 pending 파일은 먼저 삭제한다.
+        /// 이전 세션이 다 보내지 못한 파일(크래시·전송 실패)을 이어서 보내고 정리한다.
+        /// 보존 기간이 지난 파일은 먼저 삭제한다.
         /// </summary>
         private void RetryPendingUploads()
         {
@@ -649,17 +699,19 @@ namespace LogKit
                 return;
 
             LogFileWriter.PruneExpiredFiles(_logDirectory, PENDING_RETENTION_DAYS);
-            List<string> paths = LogFileWriter.GetUploadableFilePaths(_logDirectory, _sessionId);
-            StartUploadThread(paths, false, 0);
+            List<LogShipper> shippers = new List<LogShipper>();
+            foreach (string path in LogFileWriter.GetUploadableFilePaths(_logDirectory, _sessionId))
+                shippers.Add(new LogShipper(path));
+            StartUploadThread(shippers, false, 0);
         }
 
         /// <summary>
-        /// 파일 목록을 백그라운드 스레드에서 업로드한다.
-        /// paths와 정상 종료 여부를 사용하며, 대기 시간이 0보다 크면 그 시간만큼 종료를 늦춘다.
+        /// 세션 파일들의 마무리 전송을 백그라운드 스레드에서 수행한다.
+        /// 정상 종료 여부를 사용하며, 대기 시간이 0보다 크면 그 시간만큼 종료를 늦춘다.
         /// </summary>
-        private void StartUploadThread(List<string> paths, bool endedCleanly, int waitMilliseconds)
+        private void StartUploadThread(List<LogShipper> shippers, bool endedCleanly, int waitMilliseconds)
         {
-            if (paths.Count == 0)
+            if (shippers.Count == 0)
                 return;
 
             LogUploader uploader = _uploader;
@@ -667,7 +719,7 @@ namespace LogKit
                 return;
 
             // 종료 중에도 전송이 끝나도록 포그라운드 스레드로 실행한다.
-            Thread thread = new Thread(() => UploadFiles(uploader, paths, endedCleanly));
+            Thread thread = new Thread(() => FinishSessions(uploader, shippers, endedCleanly));
             thread.IsBackground = false;
             thread.Start();
 
@@ -676,102 +728,29 @@ namespace LogKit
         }
 
         /// <summary>
-        /// 파일들을 순서대로 전송한다.
-        /// uploader와 paths, 정상 종료 여부를 사용하며, 성공 파일은 삭제하고 실패 파일은 pending으로 보존한다.
+        /// 세션 파일마다 남은 로그를 모두 보내고 결과에 따라 정리한다.
+        /// 다 보냈으면 파일을 지우고, 서버가 거부했거나 읽을 수 없으면 corrupt로 격리하며,
+        /// 통신이 실패하면 파일과 진행 위치를 남겨 다음 기동에 이어서 보낸다.
         /// </summary>
-        private void UploadFiles(LogUploader uploader, List<string> paths, bool endedCleanly)
+        private static void FinishSessions(LogUploader uploader, List<LogShipper> shippers, bool endedCleanly)
         {
-            foreach (string path in paths)
+            foreach (LogShipper shipper in shippers)
             {
-                UploadFileInChunks(uploader, path, endedCleanly);
-            }
-        }
-
-        /// <summary>파일 하나를 전송한 결과. 파일 정리 방식을 정한다.</summary>
-        private enum FileUploadOutcome
-        {
-            /// <summary>모든 파트 전송 성공. 파일과 지표 파일을 지운다.</summary>
-            Done,
-            /// <summary>통신 실패 등 다시 시도할 만한 실패. pending으로 보존한다.</summary>
-            Retry,
-            /// <summary>읽을 수 없거나 서버가 내용을 거부한 파일. 재시도해도 같으므로 corrupt로 격리한다.</summary>
-            Corrupt
-        }
-
-        /// <summary>
-        /// 세션 파일을 건수·용량 기준 파트로 나눠 파트 번호를 붙여 순서대로 전송한다.
-        /// uploader와 파일 경로, 정상 종료 여부를 사용하며, 모든 파트가 성공하면 파일과 지표 파일을 지우고
-        /// 통신이 실패하면 두 파일을 pending으로 보존해 다음 기동에 처음부터 다시 전송한다(서버 병합은 멱등).
-        /// 파트 분할은 파일 내용만으로 정해지므로 재전송해도 같은 파트 번호에 같은 항목이 들어간다.
-        /// </summary>
-        private void UploadFileInChunks(LogUploader uploader, string path, bool endedCleanly)
-        {
-            string metricsPath = LogFileWriter.GetMetricsPathFor(path);
-            MetricSample[] metrics = LogFileWriter.TryReadMetrics(metricsPath, out MetricSample[] readMetrics)
-                ? readMetrics
-                : new MetricSample[0];
-
-            // 이름 변경·삭제는 읽기 핸들을 닫은 뒤에 해야 하므로 결과만 받아 여기서 정리한다.
-            switch (UploadParts(uploader, path, metrics, endedCleanly))
-            {
-                case FileUploadOutcome.Done:
-                    LogFileWriter.TryDeleteFile(path);
-                    LogFileWriter.TryDeleteFile(metricsPath);
-                    break;
-                case FileUploadOutcome.Retry:
-                    LogFileWriter.MarkPending(path);
-                    LogFileWriter.MarkPending(metricsPath);
-                    break;
-                default:
-                    LogFileWriter.MarkCorrupt(path);
-                    break;
-            }
-        }
-
-        /// <summary>
-        /// 세션 파일을 처음부터 한 번만 순차로 읽으며 파트마다 전송한다.
-        /// uploader와 파일 경로, 지표, 정상 종료 여부를 사용하며 전송 결과를 반환한다.
-        /// 항목이 없는 세션도 지표를 보내도록 첫 파트는 항상 전송한다.
-        /// </summary>
-        private static FileUploadOutcome UploadParts(LogUploader uploader, string path, MetricSample[] metrics, bool endedCleanly)
-        {
-            using (SessionFileReader reader = SessionFileReader.TryOpen(path))
-            {
-                if (reader == null)
-                    return FileUploadOutcome.Corrupt;
-
-                LogSessionHeader header = reader.Header;
-                int part = 0;
-                while (true)
+                try
                 {
-                    if (!reader.TryReadNext(MAX_BATCH_ENTRIES, MAX_BATCH_BYTES, out LogEntry[] entries, out bool reachedEnd))
-                        return FileUploadOutcome.Retry;
-
-                    UploadBatch batch = new UploadBatch
+                    switch (shipper.Ship(uploader, true, endedCleanly))
                     {
-                        sessionId = header.sessionId,
-                        startedAtUtc = header.startedAtUtc,
-                        endedAtUtc = entries.Length > 0 ? entries[entries.Length - 1].timestampUtc : DateTime.UtcNow.ToString("o"),
-                        appVersion = header.appVersion,
-                        unityVersion = header.unityVersion,
-                        isEditor = header.isEditor,
-                        platform = header.platform,
-                        endedCleanly = endedCleanly,
-                        truncated = false,
-                        partIndex = part,
-                        metrics = metrics,
-                        entries = entries
-                    };
-
-                    UploadResult result = uploader.Upload(batch);
-                    if (result == UploadResult.Rejected)
-                        return FileUploadOutcome.Corrupt;
-                    if (result != UploadResult.Success)
-                        return FileUploadOutcome.Retry;
-
-                    if (reachedEnd)
-                        return FileUploadOutcome.Done;
-                    part++;
+                        case ShipResult.Sent:
+                            shipper.DeleteFiles();
+                            break;
+                        case ShipResult.Rejected:
+                            shipper.Quarantine();
+                            break;
+                    }
+                }
+                catch
+                {
+                    // 남은 파일은 다음 기동에 다시 시도된다.
                 }
             }
         }

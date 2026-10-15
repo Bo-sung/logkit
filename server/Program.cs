@@ -8,7 +8,7 @@ namespace LogServer;
 
 /// <summary>
 /// appsettings.json의 서버 설정을 담는 옵션 클래스.
-/// ApiKey, DataPath, MaxBodyBytes, KeepRawJsonl, RawRetentionDays를 바인딩해 처리기 전체가 참조한다.
+/// ApiKey, DataPath, MaxBodyBytes, KeepRawJsonl, RawRetentionDays, InboxProcessIntervalSeconds를 바인딩해 처리기 전체가 참조한다.
 /// </summary>
 public sealed class ServerOptions
 {
@@ -26,6 +26,9 @@ public sealed class ServerOptions
 
     /// <summary>raw 보존 일수. 기동 시 경과분을 삭제한다.</summary>
     public int RawRetentionDays { get; set; } = 90;
+
+    /// <summary>수신함 처리 묶음 간격(초). 새 업로드가 오면 이만큼 더 기다렸다가 그사이 도착분까지 한 번에 처리한다.</summary>
+    public double InboxProcessIntervalSeconds { get; set; } = 2.0;
 
     /// <summary>두 지표의 몫으로 계산하는 파생 지표 목록(공격 명중률 등). 비어 있으면 계산하지 않는다.</summary>
     public List<DerivedMetricOptions> DerivedMetrics { get; set; } = new();
@@ -50,33 +53,7 @@ public sealed class DerivedMetricOptions
 }
 
 /// <summary>
-/// 업로드 응답 본문. sessionId와 저장 accepted 건수, 정제 요약을 담는다.
-/// 재전송으로 교체된 경우에만 Replaced를 직렬화해 클라이언트가 교체 여부를 알 수 있게 한다.
-/// </summary>
-public sealed class UploadResponse
-{
-    /// <summary>처리한 세션 식별자.</summary>
-    public string SessionId { get; set; } = string.Empty;
-
-    /// <summary>CSV에 기록한 로그 행 수.</summary>
-    public int Accepted { get; set; }
-
-    /// <summary>동일 파트 파일이 이미 있어 교체된 경우 true. 신규 응답에서는 직렬화하지 않는다.</summary>
-    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
-    public bool? Replaced { get; set; }
-
-    /// <summary>이번 요청의 파트 번호.</summary>
-    public int PartIndex { get; set; }
-
-    /// <summary>서버가 보유한 세션 파트 수.</summary>
-    public int PartsStored { get; set; }
-
-    /// <summary>정제·집계한 세션 요약. 클라이언트가 전송 즉시 처리 결과를 확인할 수 있게 한다.</summary>
-    public UploadSummary Summary { get; set; } = new UploadSummary();
-}
-
-/// <summary>
-/// 수신 로그를 정제·집계한 간단 요약. 요약 CSV 한 행과 같은 수치를 JSON으로 제공한다.
+/// 세션 로그를 정제·집계한 간단 요약. 요약 CSV 한 행과 같은 수치를 담으며 수신함 처리 로그에 쓴다.
 /// </summary>
 public sealed class UploadSummary
 {
@@ -133,6 +110,8 @@ public static class Program
         builder.Services.AddSingleton(options);
         builder.Services.AddSingleton<CsvSessionStore>();
         builder.Services.AddSingleton<SessionSummary>();
+        builder.Services.AddSingleton<UploadInbox>();
+        builder.Services.AddHostedService<InboxProcessor>();
         builder.Services.Configure<Microsoft.AspNetCore.Server.Kestrel.Core.KestrelServerOptions>(kestrel =>
         {
             kestrel.Limits.MaxRequestBodySize = options.MaxBodyBytes;
@@ -161,15 +140,14 @@ public static class Program
     }
 
     /// <summary>
-    /// POST /api/logs 처리기. 본문 크기 검사 후 gzip 해제, JSON 역직렬화, 파트 저장, raw 보존, 요약 재계산을 수행한다.
-    /// context의 본문과 헤더를 사용하며 긴 세션은 partIndex로 나눠 도착한다. 신규 파트는 202,
-    /// 같은 파트 재전송은 200 응답과 sessionId, accepted 건수, 보유 파트 수를 반환한다.
+    /// POST /api/logs 처리기. 본문 크기만 검사하고 수신함에 그대로 저장한 뒤 바로 202를 반환한다.
+    /// gzip 해제·역직렬화·파트 저장·요약 재계산은 InboxProcessor가 나중에 몰아서 하므로,
+    /// 여러 세션이 동시에 자주 보내도 요청 처리는 디스크 쓰기 한 번으로 끝난다.
     /// </summary>
     private static async Task<IResult> HandleUploadAsync(
         HttpContext context,
         ServerOptions options,
-        CsvSessionStore sessionStore,
-        SessionSummary summary)
+        UploadInbox inbox)
     {
         (bool tooLarge, byte[] body) = await ReadBodyAsync(context.Request, options.MaxBodyBytes, context.RequestAborted);
         if (tooLarge)
@@ -177,55 +155,14 @@ public static class Program
             return Results.StatusCode(StatusCodes.Status413PayloadTooLarge);
         }
 
+        if (body.Length == 0)
+        {
+            return Results.BadRequest(new { error = "empty body" });
+        }
+
         bool bodyIsGzip = string.Equals(context.Request.Headers.ContentEncoding.ToString(), "gzip", StringComparison.OrdinalIgnoreCase);
-        byte[] json;
-        try
-        {
-            json = bodyIsGzip ? GzipDecompress(body) : body;
-        }
-        catch (InvalidDataException)
-        {
-            return Results.BadRequest(new { error = "gzip decompress failed" });
-        }
-
-        UploadBatch? batch;
-        try
-        {
-            batch = JsonSerializer.Deserialize<UploadBatch>(json, _jsonOptions);
-        }
-        catch (JsonException)
-        {
-            return Results.BadRequest(new { error = "invalid json body" });
-        }
-
-        if (batch is null || !CsvSessionStore.IsValidSessionId(batch.SessionId))
-        {
-            return Results.BadRequest(new { error = "missing or invalid sessionId" });
-        }
-
-        if (batch.PartIndex < 0 || batch.PartIndex > 9999)
-        {
-            return Results.BadRequest(new { error = "invalid partIndex" });
-        }
-
-        (bool replaced, int knownParts) = sessionStore.SavePart(batch, body, bodyIsGzip);
-        UploadSummary info = summary.UpsertSession(batch.SessionId, sessionStore) ?? new UploadSummary();
-
-        int accepted = batch.Entries?.Length ?? 0;
-        Console.WriteLine(
-            $"upload session={batch.SessionId} part={batch.PartIndex}/{knownParts} entries={accepted} replaced={replaced} month={info.Month} gzip={bodyIsGzip}");
-
-        UploadResponse response = new()
-        {
-            SessionId = batch.SessionId,
-            Accepted = accepted,
-            PartIndex = batch.PartIndex,
-            PartsStored = knownParts,
-            Replaced = replaced ? true : null,
-            Summary = info,
-        };
-
-        return Results.Json(response, _jsonOptions, statusCode: replaced ? 200 : StatusCodes.Status202Accepted);
+        await inbox.SaveAsync(body, bodyIsGzip, context.RequestAborted);
+        return Results.Json(new { queued = true }, _jsonOptions, statusCode: StatusCodes.Status202Accepted);
     }
 
     /// <summary>
@@ -572,19 +509,6 @@ public static class Program
         }
 
         return (false, buffer.ToArray());
-    }
-
-    /// <summary>
-    /// gzip 바이트를 평문 바이트로 해제한다.
-    /// compressed를 입력으로 사용하며 해제된 바이트를 반환하고, 형식이 깨졌으면 InvalidDataException을 던진다.
-    /// </summary>
-    private static byte[] GzipDecompress(byte[] compressed)
-    {
-        using MemoryStream input = new(compressed);
-        using GZipStream gzip = new(input, CompressionMode.Decompress);
-        using MemoryStream output = new();
-        gzip.CopyTo(output);
-        return output.ToArray();
     }
 
     /// <summary>

@@ -80,4 +80,14 @@ namespace LogKit
     {
         public MetricSample[] metrics = new MetricSample[0];
     }
+
+    /// <summary>
+    /// 세션 파일의 전송 진행 위치. 다음에 보낼 줄이 시작하는 바이트 위치와 다음 파트 번호를 담는다.
+    /// </summary>
+    [Serializable]
+    public class ShipProgress
+    {
+        public long offset;
+        public int nextPart;
+    }
 }

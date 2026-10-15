@@ -1,6 +1,6 @@
 # LogKit
 
-유니티 게임 로그 수집 → 로컬 버퍼링 → 종료 시 서버 전송 → CSV/요약 집계까지 한 번에 처리하는 경량 파이프라인.
+유니티 게임 로그 수집 → 로컬 버퍼링 → 5초 주기 서버 전송 → CSV/요약 집계까지 한 번에 처리하는 경량 파이프라인.
 
 ```
 logkit/
@@ -12,9 +12,10 @@ logkit/
 ## 데이터 흐름
 
 ```
-Play 중 수집 → 5초마다 백그라운드 워커가 로컬 JSONL 기록 → 게임 종료 시 파트(20,000건 또는 4MB 중 먼저 닿는 쪽)로 분할 gzip POST
-→ 서버 검증(크기·키·gzip·JSON) → 파트별 저장 + 통합 CSV 재구성 + 월별 요약 재계산 + raw 보존
-→ 클라이언트로 요약 JSON 응답 (실패 시 클라이언트가 .pending 보존 후 다음 기동 재전송 — 파트 전체 재전송, 서버 병합은 멱등)
+Play 중 수집 → 기록 워커가 로컬 JSONL에 덧붙임 → 전송 워커가 5초마다 새로 쌓인 줄만 파트로 gzip POST (종료 시 마무리 파트)
+→ 서버는 크기·키만 검사해 수신함(inbox)에 저장하고 즉시 202
+→ 수신함 처리기가 쌓인 파일을 몰아서 파트 저장 → 세션마다 통합 CSV 재구성·월별 요약 재계산 한 번 + raw 보존
+(전송 실패 시 진행 위치를 남겨 다음 주기·다음 기동에 이어 보냄 — 같은 파트 재전송은 서버가 교체, 멱등)
 
 Count/Measure로 모은 플레이 지표(공격 횟수 등)는 배치와 함께 전송 → 세션·월 단위 집계 + 명중률 같은 파생 지표 자동 계산
 
@@ -58,14 +59,15 @@ GameLogger.Measure("ComboLength", 5); // 콤보 길이 기록(횟수 + 합계 �
 | Api Key | `dev-log-key` | 서버 `ApiKey`와 일치해야 한다 |
 | Capture Unity Logs | true | `Debug.Log` 계열 자동 캡처 |
 | Flush Interval Seconds | 5 | 큐 → 로컬 파일 기록 주기 |
-| Upload On Quit | true | 종료 시 전송 |
+| Upload Interval Seconds | 5 | 새로 쌓인 로그를 서버로 보내는 주기. 0 이하면 종료 때만 보낸다 |
+| Upload On Quit | true | 종료 시 남은 로그 마무리 전송 |
 | Retry Pending On Startup | true | 기동 시 미전송 파일 재전송 |
 | Request Timeout Seconds | 5 | HTTP 타임아웃 |
 
-- 로컬 버퍼: `Application.persistentDataPath/Logs/{세션ID}.jsonl` + `{세션ID}.metrics.json` (전송 성공 시 함께 삭제)
-- 세션당 기록 상한은 없다. 로컬 파일은 세션 길이만큼 커지고, 전송 때 파일을 한 번만 순차로 읽으며 파트로 나눈다.
-- 파트는 20,000건 또는 항목 JSON 4MB(압축 전) 중 먼저 닿는 쪽에서 끊어 서버 본문 상한(기본 5MB gzip)을 넘지 않는다.
-- 통신 실패는 `.pending`으로 보존해 다음 기동에 재전송하고, 서버가 400·413으로 거부한 파일은 재시도하지 않고 `.corrupt`로 격리한다.
+- 로컬 버퍼: `Application.persistentDataPath/Logs/{세션ID}.jsonl` + `{세션ID}.metrics.json` + `{세션ID}.progress.json`(보낸 위치). 마무리 전송 성공 시 함께 삭제
+- 세션당 기록 상한은 없다. 전송 워커는 진행 위치 뒤에 새로 쌓인 줄만 읽어 보내므로 세션이 길어도 한 번 전송 비용은 그 사이 쌓인 양에 비례한다.
+- 한 파트는 최대 20,000건 또는 항목 JSON 4MB(압축 전)로, 서버 본문 상한(기본 5MB gzip)을 넘지 않는다. 밀린 양이 많으면 여러 파트로 연달아 보낸다.
+- 통신 실패는 진행 위치를 남겨 다음 주기(종료 후라면 다음 기동)에 이어 보낸다. 서버가 400·413으로 거부한 파일은 재시도하지 않고 `.corrupt`로 격리한다.
 - 파일 기록은 메인 스레드가 아닌 전용 워커 스레드가 담당한다. Update는 신호만 보낸다.
 - 대상 플랫폼: Windows 스탠드얼론(에디터 포함). WebGL은 스레드·동기 HTTP 제약으로 미지원
 
@@ -87,6 +89,7 @@ dotnet run            # http://0.0.0.0:5000 에서 대기, 데이터는 server/d
 | DataPath | `data` | CSV·raw 저장 위치(프로세스 작업 디렉터리 기준, 절대 경로 권장) |
 | MaxBodyBytes | 5242880 | gzip 본문 상한(초과 413) |
 | KeepRawJsonl / RawRetentionDays | true / 90 | 원문 보존 여부와 기간 |
+| InboxProcessIntervalSeconds | 2 | 업로드가 오면 이만큼 더 기다렸다가 그사이 도착분까지 한 번에 처리 |
 
 ### 열람 — 대시보드와 API
 
@@ -94,7 +97,7 @@ dotnet run            # http://0.0.0.0:5000 에서 대기, 데이터는 server/d
 
 | 엔드포인트 | 인증 | 설명 |
 | --- | --- | --- |
-| `POST /api/logs` | 필요 | 업로드. 성공 202(신규)/200(교체) + 요약 JSON |
+| `POST /api/logs` | 필요 | 업로드. 수신함에 저장 후 202 `{"queued":true}`. 처리는 백그라운드에서 몰아서 한다 |
 | `GET /health` | 불필요 | `ok` |
 | `GET /dashboard` | 불필요 | 열람 대시보드(`/` 리디렉션) |
 | `GET /api/months` | 필요 | 월 목록 + 월별 집계 |

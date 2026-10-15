@@ -40,9 +40,12 @@ public sealed class CsvSessionStore
     private const int MAX_SHORT_CHARS = 256;
     private const string TIMESTAMP_FORMAT = "yyyy-MM-dd HH:mm:ss.fff";
 
+    /// <summary>받을 수 있는 최대 파트 번호. 클라이언트가 5초마다 파트를 보내도 약 58일 분량이다.</summary>
+    public const int MaxPartIndex = 999999;
+
     private static readonly Regex _safeSessionId = new("^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$", RegexOptions.Compiled);
-    private static readonly Regex _partFilePattern = new(@"^" + FILE_BASE_CAPTURE + @"\.p(\d{4})\.csv$", RegexOptions.Compiled);
-    private static readonly Regex _rawPartFilePattern = new(@"^" + FILE_BASE_CAPTURE + @"\.p(\d{4})\.jsonl\.gz$", RegexOptions.Compiled);
+    private static readonly Regex _partFilePattern = new(@"^" + FILE_BASE_CAPTURE + @"\.p(\d{4,6})\.csv$", RegexOptions.Compiled);
+    private static readonly Regex _rawPartFilePattern = new(@"^" + FILE_BASE_CAPTURE + @"\.p(\d{4,6})\.jsonl\.gz$", RegexOptions.Compiled);
     private static readonly UTF8Encoding _utf8Bom = new(true);
 
     /// <summary>파일명에서 sessionId를 뽑는 정규식 공통 접두.</summary>
@@ -136,25 +139,21 @@ public sealed class CsvSessionStore
     }
 
     /// <summary>
-    /// 업로드 배치를 파트로 저장하고 통합 파일을 다시 만든다.
+    /// 업로드 배치를 파트 파일로 저장한다. 통합 CSV는 다시 만들지 않는다(RebuildSession이 몰아서 한다).
     /// batch의 sessionId와 partIndex, entries, metrics와 수신 원문 rawBody를 사용하며, 세션 단위 잠금 안에서
-    /// 메타 JSON, 파트 CSV, 지표 CSV, 파트 raw gzip 기록과 통합 CSV 재구성을 수행한다.
-    /// 같은 파트 재전송은 교체로 멱등 처리되며, 기존 파트였는지와 보유 파트 수를 반환한다.
+    /// 메타 JSON, 파트 CSV, 지표 CSV, 파트 raw gzip을 기록한다. 같은 파트 재전송은 교체로 멱등 처리된다.
     /// </summary>
-    public (bool Replaced, int KnownParts) SavePart(UploadBatch batch, byte[]? rawBody, bool rawBodyIsGzip)
+    public void SavePartFiles(UploadBatch batch, byte[]? rawBody, bool rawBodyIsGzip)
     {
         // 세션 전체를 한 번에 직렬화하기 위해 메타 파일 경로를 세션 잠금으로 쓴다.
         SemaphoreSlim gate = FileLocks.Get(MetaPath(batch.SessionId));
         gate.Wait();
         try
         {
-            bool replaced = File.Exists(PartCsvPath(batch.SessionId, batch.PartIndex));
             WriteMetaFile(batch);
             WritePartCsv(batch);
             WriteMetricsCsv(batch);
             WriteRawPart(batch, rawBody, rawBodyIsGzip);
-            RebuildMergedCsv(batch.SessionId);
-            return (replaced, CountPartFiles(batch.SessionId));
         }
         finally
         {
@@ -162,20 +161,48 @@ public sealed class CsvSessionStore
         }
     }
 
-    /// <summary>세션 헤더 정보를 메타 JSON으로 교체 기록한다. 마지막에 도착한 파트의 값이 남는다.</summary>
+    /// <summary>
+    /// 저장된 파트 CSV를 번호순으로 이어 붙여 통합 세션 CSV를 다시 만든다. 세션 단위 잠금 안에서 수행한다.
+    /// 파트를 여러 개 저장한 뒤 한 번만 부르면 된다.
+    /// </summary>
+    public void RebuildSession(string sessionId)
+    {
+        SemaphoreSlim gate = FileLocks.Get(MetaPath(sessionId));
+        gate.Wait();
+        try
+        {
+            RebuildMergedCsv(sessionId);
+        }
+        finally
+        {
+            gate.Release();
+        }
+    }
+
+    /// <summary>
+    /// 세션 헤더 정보를 메타 JSON으로 교체 기록한다.
+    /// 파트가 여러 번 나눠 오므로 종료 시각은 가장 늦은 값, 정상 종료·잘림 여부는 한 파트라도 true면 true로 합친다.
+    /// </summary>
     private void WriteMetaFile(UploadBatch batch)
     {
+        SessionMeta? previous = ReadMeta(batch.SessionId);
+        string endedAtUtc = batch.EndedAtUtc;
+        if (previous is not null && string.CompareOrdinal(previous.EndedAtUtc, endedAtUtc) > 0)
+        {
+            endedAtUtc = previous.EndedAtUtc;
+        }
+
         SessionMeta meta = new SessionMeta
         {
             SessionId = batch.SessionId,
             StartedAtUtc = batch.StartedAtUtc,
-            EndedAtUtc = batch.EndedAtUtc,
+            EndedAtUtc = endedAtUtc,
             AppVersion = batch.AppVersion,
             UnityVersion = batch.UnityVersion,
             IsEditor = batch.IsEditor,
             Platform = batch.Platform,
-            EndedCleanly = batch.EndedCleanly,
-            Truncated = batch.Truncated,
+            EndedCleanly = batch.EndedCleanly || (previous?.EndedCleanly ?? false),
+            Truncated = batch.Truncated || (previous?.Truncated ?? false),
         };
         WriteAtomicText(MetaPath(batch.SessionId), JsonSerializer.Serialize(meta, JsonWeb));
     }
@@ -240,14 +267,6 @@ public sealed class CsvSessionStore
         }
 
         WriteAtomicText(SessionCsvPath(sessionId), builder.ToString());
-    }
-
-    /// <summary>세션이 보유한 파트 CSV 수를 셀수한다.</summary>
-    private int CountPartFiles(string sessionId)
-    {
-        return Directory.Exists(SessionsDirectory)
-            ? Directory.GetFiles(SessionsDirectory, sessionId + ".p*.csv").Length
-            : 0;
     }
 
     /// <summary>

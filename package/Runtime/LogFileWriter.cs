@@ -15,9 +15,11 @@ namespace LogKit
     public class LogFileWriter
     {
         private const string FILE_EXTENSION = ".jsonl";
-        private const string PENDING_SUFFIX = ".pending";
+        /// <summary>구버전이 전송 실패 파일에 붙이던 접미사. 남은 파일을 계속 재전송하려고 인식만 한다.</summary>
+        public const string PENDING_SUFFIX = ".pending";
         private const string CORRUPT_SUFFIX = ".corrupt";
         private const string METRICS_SUFFIX = ".metrics.json";
+        private const string PROGRESS_SUFFIX = ".progress.json";
 
         private readonly string _filePath;
         private readonly object _writeLock = new object();
@@ -33,7 +35,13 @@ namespace LogKit
         /// </summary>
         public LogFileWriter(string logDirectory, string sessionId)
         {
-            _filePath = Path.Combine(logDirectory, sessionId + FILE_EXTENSION);
+            _filePath = GetSessionFilePath(logDirectory, sessionId);
+        }
+
+        /// <summary>세션 ID에 대응하는 세션 로그 파일 경로를 돌려준다.</summary>
+        public static string GetSessionFilePath(string logDirectory, string sessionId)
+        {
+            return Path.Combine(logDirectory, sessionId + FILE_EXTENSION);
         }
 
         /// <summary>
@@ -71,6 +79,7 @@ namespace LogKit
         /// <summary>
         /// 세션 지표 스냄샷을 지표 파일로 교체 기록한다.
         /// metrics를 사용하며, 비어 있으면 아무것도 하지 않는다.
+        /// 전송 스레드가 같은 파일을 읽는 중이어도 충돌하지 않도록 임시 파일에 쓴 뒤 교체한다.
         /// </summary>
         public void WriteMetrics(MetricSample[] metrics)
         {
@@ -80,7 +89,13 @@ namespace LogKit
             MetricSnapshot snapshot = new MetricSnapshot { metrics = metrics };
             lock (_writeLock)
             {
-                File.WriteAllText(MetricsFilePath, JsonUtility.ToJson(snapshot));
+                string metricsPath = MetricsFilePath;
+                string tempPath = metricsPath + ".tmp";
+                File.WriteAllText(tempPath, JsonUtility.ToJson(snapshot));
+                if (File.Exists(metricsPath))
+                    File.Replace(tempPath, metricsPath, null);
+                else
+                    File.Move(tempPath, metricsPath);
             }
         }
 
@@ -114,12 +129,27 @@ namespace LogKit
         /// </summary>
         public static string GetMetricsPathFor(string logFilePath)
         {
+            return GetBasePath(logFilePath) + METRICS_SUFFIX;
+        }
+
+        /// <summary>
+        /// 로그 파일 경로에 대응하는 전송 진행 파일 경로를 돌려준다.
+        /// 로그 파일 경로(pending 이름도 허용)를 입력으로 사용한다.
+        /// </summary>
+        public static string GetProgressPathFor(string logFilePath)
+        {
+            return GetBasePath(logFilePath) + PROGRESS_SUFFIX;
+        }
+
+        /// <summary>로그 파일 경로에서 pending·확장자 접미사를 떼어 세션 기준 경로를 만든다.</summary>
+        private static string GetBasePath(string logFilePath)
+        {
             string basePath = logFilePath;
             if (basePath.EndsWith(PENDING_SUFFIX, StringComparison.Ordinal))
                 basePath = basePath.Substring(0, basePath.Length - PENDING_SUFFIX.Length);
             if (basePath.EndsWith(FILE_EXTENSION, StringComparison.Ordinal))
                 basePath = basePath.Substring(0, basePath.Length - FILE_EXTENSION.Length);
-            return basePath + METRICS_SUFFIX;
+            return basePath;
         }
 
         /// <summary>
@@ -134,7 +164,13 @@ namespace LogKit
                 if (!File.Exists(metricsFilePath))
                     return false;
 
-                MetricSnapshot snapshot = JsonUtility.FromJson<MetricSnapshot>(File.ReadAllText(metricsFilePath));
+                // 기록 스레드의 교체 쓰기를 막지 않도록 공유 모드로 연다.
+                string json;
+                using (FileStream stream = new FileStream(metricsFilePath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete))
+                using (StreamReader reader = new StreamReader(stream, Encoding.UTF8))
+                    json = reader.ReadToEnd();
+
+                MetricSnapshot snapshot = JsonUtility.FromJson<MetricSnapshot>(json);
                 if (snapshot?.metrics == null)
                     return false;
 
@@ -149,15 +185,6 @@ namespace LogKit
         }
 
         /// <summary>
-        /// 업로드에 실패한 파일을 pending 이름으로 바꿔 보존한다.
-        /// 파일 경로를 사용하며, 다음 기동 재전송 대상이 되도록 한다.
-        /// </summary>
-        public static void MarkPending(string filePath)
-        {
-            RenameFile(filePath, PENDING_SUFFIX);
-        }
-
-        /// <summary>
         /// 읽기에 실패해 재시도해도 의미 없는 파일을 corrupt 이름으로 격리한다.
         /// 파일 경로를 사용하며, 재전송 목록에서 제외되게 한다.
         /// </summary>
@@ -167,7 +194,7 @@ namespace LogKit
         }
 
         /// <summary>
-        /// 보존 기간이 지난 pending 파일과 지표 파일을 삭제한다.
+        /// 보존 기간이 지난 세션·pending·지표·진행 파일을 삭제한다. 그동안 한 번도 전송에 성공하지 못한 세션은 버려진다.
         /// 로그 디렉터리와 보존 일수를 사용하며, 기준이 지난 파일만 제거한다.
         /// </summary>
         public static void PruneExpiredFiles(string logDirectory, int retentionDays)
@@ -178,8 +205,10 @@ namespace LogKit
             DateTime threshold = DateTime.UtcNow.AddDays(-retentionDays);
             string[] searchPatterns =
             {
+                "*" + FILE_EXTENSION,
                 "*" + FILE_EXTENSION + PENDING_SUFFIX,
                 "*" + METRICS_SUFFIX,
+                "*" + PROGRESS_SUFFIX,
                 "*" + METRICS_SUFFIX + PENDING_SUFFIX,
             };
             foreach (string searchPattern in searchPatterns)
