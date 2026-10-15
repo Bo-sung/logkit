@@ -112,6 +112,7 @@ public static class Program
         builder.Services.AddSingleton<SessionSummary>();
         builder.Services.AddSingleton<UploadInbox>();
         builder.Services.AddHostedService<InboxProcessor>();
+        builder.Services.AddSingleton<GameAnalytics>();
         builder.Services.Configure<Microsoft.AspNetCore.Server.Kestrel.Core.KestrelServerOptions>(kestrel =>
         {
             kestrel.Limits.MaxRequestBodySize = options.MaxBodyBytes;
@@ -122,6 +123,7 @@ public static class Program
         app.UseMiddleware<ApiKeyAuth>();
         app.MapGet("/", () => Results.Redirect("/dashboard"));
         app.MapGet("/dashboard", HandleDashboard);
+        app.MapGet("/analytics", HandleAnalyticsPage);
         app.MapPost("/api/logs", HandleUploadAsync);
         app.MapGet("/health", HandleHealth);
         app.MapGet("/api/months", HandleMonths);
@@ -130,6 +132,7 @@ public static class Program
         app.MapGet("/api/sessions/{sessionId}/csv", HandleSessionCsv);
         app.MapGet("/api/sessions/{sessionId}/raw", HandleSessionRaw);
         app.MapGet("/api/metrics", HandleMonthMetrics);
+        app.MapGet("/api/analytics", HandleAnalytics);
         app.MapDelete("/api/sessions/{sessionId}", HandleDeleteSession);
         app.MapDelete("/api/months/{month}", HandleDeleteMonth);
         app.MapGet("/api/summary/{month}.csv", HandleSummary);
@@ -181,6 +184,31 @@ public static class Program
     private static IResult HandleDashboard()
     {
         return Results.Content(DashboardPage.Html, "text/html; charset=utf-8");
+    }
+
+    /// <summary>
+    /// GET /analytics 처리기. 버전별 플레이 분석 페이지 HTML을 돌려준다.
+    /// 입력값은 없으며 200 상태와 text/html 본문을 반환한다.
+    /// </summary>
+    private static IResult HandleAnalyticsPage()
+    {
+        return Results.Content(AnalyticsPage.Html, "text/html; charset=utf-8");
+    }
+
+    /// <summary>
+    /// GET /api/analytics 처리기. 게임 이벤트 로그를 버전별로 집계한 플레이 분석을 돌려준다.
+    /// month(yyyy-MM, 생략 시 전체 월)와 excludeEditor(true면 에디터 세션 제외)를 사용하며
+    /// month 형식이 틀리면 400, 그 외에는 200과 분석 JSON을 반환한다.
+    /// </summary>
+    private static IResult HandleAnalytics(string? month, string? excludeEditor, GameAnalytics analytics)
+    {
+        if (!string.IsNullOrEmpty(month) && !_monthPattern.IsMatch(month))
+        {
+            return Results.BadRequest(new { error = "month must be yyyy-MM" });
+        }
+
+        bool skipEditor = string.Equals(excludeEditor, "true", StringComparison.OrdinalIgnoreCase);
+        return Results.Json(analytics.Build(month, skipEditor), _jsonOptions);
     }
 
     /// <summary>

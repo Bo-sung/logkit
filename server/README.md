@@ -58,6 +58,8 @@ dotnet run        # http://0.0.0.0:5000 에서 대기
 | `DELETE /api/months/{yyyy-MM}` | 필요 | 200 JSON | 월 전체 세션·요약 삭제(없으면 404) |
 | `GET /api/summary/{yyyy-MM}.csv` | 필요 | 200 `text/csv` | 월별 요약 CSV 다운로드(없거나 형식이 틀리면 404) |
 | `GET /dashboard` | 불필요 | 200 `text/html` | 브라우저 열람 대시보드. `/`는 `/dashboard`로 리디렉션 |
+| `GET /analytics` | 불필요 | 200 `text/html` | 버전별 플레이 분석 페이지 |
+| `GET /api/analytics` | 필요 | 200 JSON | 게임 이벤트 로그를 앱 버전별로 집계. `month`(yyyy-MM, 생략 시 전체 기간), `excludeEditor=true`(에디터 세션 제외). 형식이 틀리면 400 |
 
 인증은 `X-Api-Key` 헤더 하나다. 브라우저 다운로드 링크처럼 헤더를 붙일 수 없는 요청은 `?key=API키` 쿼리로 대신할 수 있다. `/health`와 `/dashboard` 페이지 자체는 예외고, 대시보드가 부르는 `/api` 호출은 전부 검사한다.
 
@@ -88,6 +90,44 @@ curl -H "X-Api-Key: dev-log-key" http://localhost:5000/api/summary/2026-10.csv
 - **세션 상세**: 레벨(Info~Exception) 체크박스, 카테고리·씬·텍스트 필터, 500건 단위 페이지 이동. 항목 행을 클릭하면 메시지 전문·dataJson(정렬됨)·스택트레이스가 펼쳐진다. 하단에 플레이 지표 표와 파생 지표(명중률 등)가 나온다.
 - **월 지표**: 세션 목록 위에 그 달 전체 지표 합계와 파생 지표(공격 명중률 등)가 표시된다(`/api/metrics`).
 - **내려받기/삭제**: 세션 CSV·raw gzip 내려받기, 세션 삭제, 월 전체 삭제(월 키 입력 확인).
+
+## 플레이 분석 (/analytics)
+
+`http://localhost:5000/analytics`(GM툴 상단 링크)에서 게임 이벤트 로그를 **앱 버전(`appVersion`)별로** 비교한다. API 키는 GM툴과 공유한다.
+
+- **버전 선택**: 최대 8개 버전을 켜고 끈다. 색은 버전에 고정되어 선택을 바꿔도 남은 버전의 색이 바뀌지 않는다.
+- **핵심 지표 표**: 상점 일수·시간·금액 증감, 주문 성공률·사망률, 주문당 사격 횟수, 작업대 체류, 습격 탈출률·소요 시간·금고 보상·처치 수·잔여 체력.
+- **상점 운영**: 주문당 사격 테스트 횟수 분포(예상 횟수 입력 → 초과 비율), 게임 일수별 평균 금액, NPC 제출 총·프리셋 저장 총 비율.
+- **야간 습격**: 가져간 총·모듈 비율, 경과 시간별 평균 체력/금고/탱크/헬기, 스테이지별 블록 파괴, 적 종류별 생성·발견·처치, 스테이지별 위치 히트맵(버전별 나란히).
+
+집계는 세션 CSV를 이벤트 규약대로 훑어 만든다. 세션별 중간 결과는 CSV 수정 시각 기준으로 메모리에 캐시한다.
+
+### 이벤트 규약
+
+`GameLogger.Data("Info", 카테고리, 이벤트, 데이터)`로 기록한다. message가 이벤트 이름이고, 데이터 필드는 대소문자를 구분하지 않는다. 시간은 로그 시각(`timestampUtc`)을 그대로 쓰므로 데이터에 넣지 않아도 된다.
+
+| 카테고리 | 이벤트 | 데이터 필드 |
+| --- | --- | --- |
+| Shop | `ShopStart` / `ShopEnd` | `day`, `money` |
+| Shop | `WorkbenchEnter` | `orderId` |
+| Shop | `WorkbenchExit` | `orderId`, `gunCode` |
+| Shop | `CustomerInteract` | `orderId` |
+| Shop | `OrderComplete` | `orderId`, `success`, `died`, `gunCode`(선택 — 없으면 그 주문의 마지막 `WorkbenchExit` 총을 제출 총으로 본다) |
+| Shop | `PresetSave` | `gunCode` |
+| Shop | `Fire` | `orderId`, `gunCode` |
+| Raid | `RaidStart` | `stageId`, `guns`(배열), `modules`(배열, 선택) |
+| Raid | `RaidSample` | `x`, `y`, `z`, `yaw`, `pitch`, `hp`, `vaults`, `tanks`, `helis` — 고정 주기 표본 |
+| Raid | `BlockDestroyed` | `stageId`, `blockId` |
+| Raid | `EnemySpawn` / `EnemySpotted` / `EnemyKilled` | `enemyId` |
+| Raid | `EscapeSuccess` | `playTime`, `vaultReward`, `kills`, `hp` |
+
+```csharp
+[Serializable] class OrderCompleteData { public string orderId; public bool success; public bool died; public string gunCode; }
+GameLogger.Data("Info", "Shop", "OrderComplete", new OrderCompleteData { orderId = "3-1", success = true, gunCode = "AR-01" });
+```
+
+- 습격 한 판은 `RaidStart`부터 `EscapeSuccess`(탈출) 또는 다음 Shop 이벤트(실패)까지다. 탈출 성공률 = 탈출 / 습격 시작.
+- `RaidSample`을 FixedUpdate(기본 50Hz)마다 남기면 10분 습격 한 판에 3만 건이 넘는다. 세션 상한은 없지만 로컬 파일·전송량·서버 집계 비용이 함께 커지므로 0.2~0.5초 간격으로 솎아 기록하길 권장한다.
 
 ## 대시보드가 없어도 되는 이유
 

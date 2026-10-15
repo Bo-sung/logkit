@@ -85,6 +85,7 @@ nav { display: flex; align-items: center; gap: 8px; }
 <body>
 <header>
   <div class="brand">LOGKIT<span>GM TOOL</span></div>
+  <a href="/analytics" style="color:var(--muted);text-decoration:none;font-size:12px">플레이 분석 →</a>
   <div id="status" class="status">API 키를 입력하고 연결하세요.</div>
   <span class="spacer"></span>
   <div class="keybox">
