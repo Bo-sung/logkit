@@ -9,7 +9,7 @@ namespace LogKit
 {
 
     /// <summary>
-    /// 세션 로그를 JSONL 파일로 기록하고 업로드용 청크로 다시 읽는다.
+    /// 세션 로그를 JSONL 파일로 기록한다. 업로드용 읽기는 SessionFileReader가 맡는다.
     /// 로그 디렉터리와 세션 ID를 사용하며, 파일 생성·추가·지표 파일 기록·pending 및 corrupt 전환을 담당한다.
     /// </summary>
     public class LogFileWriter
@@ -149,74 +149,6 @@ namespace LogKit
         }
 
         /// <summary>
-        /// 세션 파일에서 첫 줄 헤더와 항목 줄을 건너뛴 위치부터 최대 take개의 항목을 읽는다.
-        /// 파일 경로와 건너뛸 항목 수, 가져올 항목 수, 이전 호출에서 얻은 헤더를 입력으로 사용하며,
-        /// 읽기 성공 여부와 항목 배열, 파일 끝에 도달했는지를 반환한다. 읽기에 실패하면 false를 반환한다.
-        /// </summary>
-        public static bool TryReadChunk(string filePath, int skip, int take, ref LogSessionHeader header, out LogEntry[] entries, out bool reachedEnd)
-        {
-            entries = new LogEntry[0];
-            reachedEnd = true;
-            try
-            {
-                List<LogEntry> buffer = new List<LogEntry>(Math.Max(0, take));
-                int entryIndex = 0;
-                bool sawHeader = false;
-                using (IEnumerator<string> lines = File.ReadLines(filePath).GetEnumerator())
-                {
-                    while (lines.MoveNext())
-                    {
-                        string line = lines.Current;
-                        if (!sawHeader)
-                        {
-                            sawHeader = true;
-                            if (header == null)
-                            {
-                                header = JsonUtility.FromJson<LogSessionHeader>(line);
-                                if (header == null || string.IsNullOrEmpty(header.sessionId))
-                                    return false;
-                            }
-                            continue;
-                        }
-                        if (string.IsNullOrWhiteSpace(line))
-                            continue;
-                        if (entryIndex < skip)
-                        {
-                            entryIndex++;
-                            continue;
-                        }
-                        if (buffer.Count >= take)
-                        {
-                            reachedEnd = false;
-                            break;
-                        }
-
-                        LogEntry entry = JsonUtility.FromJson<LogEntry>(line);
-                        if (entry != null)
-                        {
-                            Normalize(entry);
-                            buffer.Add(entry);
-                        }
-                        entryIndex++;
-                    }
-                }
-
-                if (!sawHeader)
-                    return false;
-                if (buffer.Count < take)
-                    reachedEnd = true;
-                entries = buffer.ToArray();
-                return true;
-            }
-            catch
-            {
-                entries = new LogEntry[0];
-                reachedEnd = true;
-                return false;
-            }
-        }
-
-        /// <summary>
         /// 업로드에 실패한 파일을 pending 이름으로 바꿔 보존한다.
         /// 파일 경로를 사용하며, 다음 기동 재전송 대상이 되도록 한다.
         /// </summary>
@@ -275,21 +207,6 @@ namespace LogKit
             {
                 // 삭제 실패 시 다음 기동에 다시 시도된다.
             }
-        }
-
-        /// <summary>
-        /// 항목의 null 문자열 필드를 빈 문자열로 바꾼다.
-        /// 저장 시 누락된 필드가 있어도 배치 직렬화가 안전하도록 한다.
-        /// </summary>
-        private static void Normalize(LogEntry entry)
-        {
-            entry.timestampUtc ??= "";
-            entry.level ??= "";
-            entry.category ??= "";
-            entry.scene ??= "";
-            entry.message ??= "";
-            entry.dataJson ??= "";
-            entry.stackTrace ??= "";
         }
 
         /// <summary>

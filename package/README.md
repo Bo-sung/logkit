@@ -7,7 +7,7 @@
 Package Manager → `Add package from git URL`:
 
 ```
-https://github.com/Bo-sung/logkit.git?path=package#v0.2.1
+https://github.com/Bo-sung/logkit.git?path=package#v0.3.0
 ```
 
 ## 사용법
@@ -35,7 +35,7 @@ GameLogger.Measure("ComboLength", 5); // 값 기록(횟수 + 합계 → 평균 �
 
 - `Debug.Log` 계열은 설정을 끄지 않는 한 자동 수집된다.
 - 파일 기록은 전용 워커 스레드가 담당하므로 고빈도 수집에도 프레임을 막지 않는다.
-- 세션이 아무리 길어도 20,000건씩 파트로 나눠 전부 전송한다. 실패 시 다음 기동에 파트 전체를 재전송한다(서버 병합은 멱등).
+- 세션당 기록 상한은 없다. 전송은 20,000건 또는 4MB(압축 전) 중 먼저 닿는 쪽에서 파트를 나눠 전부 보낸다. 실패 시 다음 기동에 파트 전체를 재전송한다(서버 병합은 멱등).
 - 서버 주소·API 키 등은 씬에 배치한 `GameLogger` 컴포넌트의 Inspector에서 바꾼다(없으면 코드 기본값).
 - 데이터는 `Application.persistentDataPath/Logs/{세션ID}.jsonl`과 `{세션ID}.metrics.json`에 버퍼링되고, 종료 시 서버로 전송된다. 실패 시 다음 기동에 자동 재전송된다.
 

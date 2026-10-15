@@ -25,16 +25,18 @@ namespace LogKit
         private const string DEFAULT_API_KEY = "dev-log-key";
         private const string LOG_DIRECTORY_NAME = "Logs";
         private const string UNITY_CATEGORY = "Unity";
-        private const string MARKER_CATEGORY = "Logging";
         private const string LEVEL_INFO = "Info";
         private const string LEVEL_WARNING = "Warning";
         private const string LEVEL_ERROR = "Error";
 
-        /// <summary>한 번의 요청으로 보내는 최대 항목 수. 세션 파일은 이 크기의 파트로 나눠 전송한다.</summary>
+        /// <summary>한 번의 요청으로 보내는 최대 항목 수. 세션 파일은 이 건수나 아래 용량 중 먼저 닿는 쪽에서 파트를 나눈다.</summary>
         private const int MAX_BATCH_ENTRIES = 20000;
 
-        /// <summary>세션당 캡처 기본 상한. 0 이하로 두면 상한이 없다.</summary>
-        private const int DEFAULT_MAX_SESSION_ENTRIES = 100000;
+        /// <summary>
+        /// 한 파트에 담는 항목 JSON의 최대 크기(UTF-8 바이트, 압축 전).
+        /// 압축이 전혀 안 돼도 서버 기본 본문 상한(5MB gzip)을 넘지 않도록 잡는다. 항목 하나가 이보다 크면 그 항목만 단독 파트로 보낸다.
+        /// </summary>
+        private const long MAX_BATCH_BYTES = 4L * 1024 * 1024;
         private const int PENDING_RETENTION_DAYS = 30;
         private const int QUIT_WAIT_MILLISECONDS = 3000;
         private const int QUIT_WRITER_JOIN_MILLISECONDS = 1500;
@@ -51,8 +53,6 @@ namespace LogKit
 
         [Header("수집 설정")]
         [SerializeField] private bool _captureUnityLogs = true;
-        [SerializeField] [Tooltip("세션당 캡처 상한(건). 0 이하로 두면 상한이 없다. 초과분은 버리고 마커 1건을 남긴다.")]
-        private int _maxEntriesPerSession = DEFAULT_MAX_SESSION_ENTRIES;
         [SerializeField] private float _flushIntervalSeconds = 5f;
 
         [Header("전송 설정")]
@@ -73,7 +73,6 @@ namespace LogKit
             public string ReleaseServerUrl;
             public string ApiKey;
             public bool? CaptureUnityLogs;
-            public int? MaxEntriesPerSession;
             public float? FlushIntervalSeconds;
             public bool? UploadOnQuit;
             public bool? RetryPendingOnStartup;
@@ -91,7 +90,6 @@ namespace LogKit
         private string _sessionStartedAtUtc = string.Empty;
         private LogSessionHeader _sessionHeader;
         private string _currentSceneName = string.Empty;
-        private bool _truncationMarkQueued;
         private bool _quitFlushTriggered;
         private bool _bootstrapped;
         private float _flushTimer;
@@ -100,7 +98,6 @@ namespace LogKit
         private AutoResetEvent _flushSignal;
         private Thread _writerThread;
         private volatile bool _stopWriter;
-        private int _capturedCount;
 
         /// <summary>지표 누적기. count는 Interlocked로, sum은 락으로 더한다.</summary>
         private sealed class MetricAccumulator
@@ -141,7 +138,6 @@ namespace LogKit
             string releaseServerUrl = null,
             string apiKey = null,
             bool? captureUnityLogs = null,
-            int? maxEntriesPerSession = null,
             float? flushIntervalSeconds = null,
             bool? uploadOnQuit = null,
             bool? retryPendingOnStartup = null,
@@ -151,7 +147,7 @@ namespace LogKit
             if (logger != null)
             {
                 logger.ApplyValues(developmentServerUrl, releaseServerUrl, apiKey, captureUnityLogs,
-                    maxEntriesPerSession, flushIntervalSeconds, uploadOnQuit, retryPendingOnStartup, requestTimeoutSeconds);
+                    flushIntervalSeconds, uploadOnQuit, retryPendingOnStartup, requestTimeoutSeconds);
                 logger.RebuildUploader();
                 return;
             }
@@ -164,7 +160,6 @@ namespace LogKit
                 if (releaseServerUrl != null) _overrides.ReleaseServerUrl = releaseServerUrl;
                 if (apiKey != null) _overrides.ApiKey = apiKey;
                 if (captureUnityLogs.HasValue) _overrides.CaptureUnityLogs = captureUnityLogs;
-                if (maxEntriesPerSession.HasValue) _overrides.MaxEntriesPerSession = maxEntriesPerSession;
                 if (flushIntervalSeconds.HasValue) _overrides.FlushIntervalSeconds = flushIntervalSeconds;
                 if (uploadOnQuit.HasValue) _overrides.UploadOnQuit = uploadOnQuit;
                 if (retryPendingOnStartup.HasValue) _overrides.RetryPendingOnStartup = retryPendingOnStartup;
@@ -177,14 +172,13 @@ namespace LogKit
         /// Configure(즉시 적용)와 기동 전 오버라이드 소비가 함께 쓴다.
         /// </summary>
         private void ApplyValues(string developmentServerUrl, string releaseServerUrl, string apiKey,
-            bool? captureUnityLogs, int? maxEntriesPerSession, float? flushIntervalSeconds,
+            bool? captureUnityLogs, float? flushIntervalSeconds,
             bool? uploadOnQuit, bool? retryPendingOnStartup, int? requestTimeoutSeconds)
         {
             if (developmentServerUrl != null) _developmentServerUrl = developmentServerUrl;
             if (releaseServerUrl != null) _releaseServerUrl = releaseServerUrl;
             if (apiKey != null) _apiKey = apiKey;
             if (captureUnityLogs.HasValue) _captureUnityLogs = captureUnityLogs.Value;
-            if (maxEntriesPerSession.HasValue) _maxEntriesPerSession = maxEntriesPerSession.Value;
             if (flushIntervalSeconds.HasValue) _flushIntervalSeconds = flushIntervalSeconds.Value;
             if (uploadOnQuit.HasValue) _uploadOnQuit = uploadOnQuit.Value;
             if (retryPendingOnStartup.HasValue) _retryPendingOnStartup = retryPendingOnStartup.Value;
@@ -214,7 +208,7 @@ namespace LogKit
                     return;
 
                 ApplyValues(overrides.DevelopmentServerUrl, overrides.ReleaseServerUrl, overrides.ApiKey,
-                    overrides.CaptureUnityLogs, overrides.MaxEntriesPerSession, overrides.FlushIntervalSeconds,
+                    overrides.CaptureUnityLogs, overrides.FlushIntervalSeconds,
                     overrides.UploadOnQuit, overrides.RetryPendingOnStartup, overrides.RequestTimeoutSeconds);
             }
         }
@@ -473,8 +467,7 @@ namespace LogKit
 
         /// <summary>
         /// 로그 항목을 큐에 추가한다.
-        /// entry를 사용하며, 세션 총 캡처 수가 상한에 도달하면 이후 항목을 버리고 한 번만 마커를 남긴다.
-        /// 상한은 큐 크기가 아니라 세션 전체 기록량 기준이다. 0 이하로 두면 상한이 없다.
+        /// entry를 사용하며, 세션당 기록량 상한은 없다. 종료 플러시 이후 항목은 버린다.
         /// </summary>
         private void Enqueue(LogEntry entry)
         {
@@ -483,17 +476,6 @@ namespace LogKit
 
             lock (_queueLock)
             {
-                if (_maxEntriesPerSession > 0 && _capturedCount >= _maxEntriesPerSession)
-                {
-                    // 상한 도달 후에는 항목을 버리고 대신 마커를 한 번 남긴다.
-                    if (_truncationMarkQueued)
-                        return;
-                    _truncationMarkQueued = true;
-                    _queue.Enqueue(CreateTruncationMarker());
-                    return;
-                }
-
-                _capturedCount++;
                 _queue.Enqueue(entry);
             }
         }
@@ -705,10 +687,22 @@ namespace LogKit
             }
         }
 
+        /// <summary>파일 하나를 전송한 결과. 파일 정리 방식을 정한다.</summary>
+        private enum FileUploadOutcome
+        {
+            /// <summary>모든 파트 전송 성공. 파일과 지표 파일을 지운다.</summary>
+            Done,
+            /// <summary>통신 실패 등 다시 시도할 만한 실패. pending으로 보존한다.</summary>
+            Retry,
+            /// <summary>읽을 수 없거나 서버가 내용을 거부한 파일. 재시도해도 같으므로 corrupt로 격리한다.</summary>
+            Corrupt
+        }
+
         /// <summary>
-        /// 세션 파일을 청크 크기로 나눠 파트 번호를 붙여 순서대로 전송한다.
+        /// 세션 파일을 건수·용량 기준 파트로 나눠 파트 번호를 붙여 순서대로 전송한다.
         /// uploader와 파일 경로, 정상 종료 여부를 사용하며, 모든 파트가 성공하면 파일과 지표 파일을 지우고
-        /// 하나라도 실패하면 두 파일을 pending으로 보존해 다음 기동에 처음부터 다시 전송한다(서버 병합은 멱등).
+        /// 통신이 실패하면 두 파일을 pending으로 보존해 다음 기동에 처음부터 다시 전송한다(서버 병합은 멱등).
+        /// 파트 분할은 파일 내용만으로 정해지므로 재전송해도 같은 파트 번호에 같은 항목이 들어간다.
         /// </summary>
         private void UploadFileInChunks(LogUploader uploader, string path, bool endedCleanly)
         {
@@ -717,52 +711,69 @@ namespace LogKit
                 ? readMetrics
                 : new MetricSample[0];
 
-            LogSessionHeader header = null;
-            int part = 0;
-            while (true)
+            // 이름 변경·삭제는 읽기 핸들을 닫은 뒤에 해야 하므로 결과만 받아 여기서 정리한다.
+            switch (UploadParts(uploader, path, metrics, endedCleanly))
             {
-                if (!LogFileWriter.TryReadChunk(path, part * MAX_BATCH_ENTRIES, MAX_BATCH_ENTRIES, ref header, out LogEntry[] entries, out bool reachedEnd))
-                {
-                    if (part == 0)
-                        LogFileWriter.MarkCorrupt(path);
-                    else
-                        LogFileWriter.MarkPending(path);
-                    return;
-                }
-
-                if (entries.Length == 0 && part > 0)
+                case FileUploadOutcome.Done:
+                    LogFileWriter.TryDeleteFile(path);
+                    LogFileWriter.TryDeleteFile(metricsPath);
                     break;
-
-                UploadBatch batch = new UploadBatch
-                {
-                    sessionId = header.sessionId,
-                    startedAtUtc = header.startedAtUtc,
-                    endedAtUtc = entries.Length > 0 ? entries[entries.Length - 1].timestampUtc : DateTime.UtcNow.ToString("o"),
-                    appVersion = header.appVersion,
-                    unityVersion = header.unityVersion,
-                    isEditor = header.isEditor,
-                    platform = header.platform,
-                    endedCleanly = endedCleanly,
-                    truncated = false,
-                    partIndex = part,
-                    metrics = metrics,
-                    entries = entries
-                };
-
-                if (!uploader.Upload(batch))
-                {
+                case FileUploadOutcome.Retry:
                     LogFileWriter.MarkPending(path);
                     LogFileWriter.MarkPending(metricsPath);
-                    return;
-                }
-
-                if (reachedEnd)
                     break;
-                part++;
+                default:
+                    LogFileWriter.MarkCorrupt(path);
+                    break;
             }
+        }
 
-            LogFileWriter.TryDeleteFile(path);
-            LogFileWriter.TryDeleteFile(metricsPath);
+        /// <summary>
+        /// 세션 파일을 처음부터 한 번만 순차로 읽으며 파트마다 전송한다.
+        /// uploader와 파일 경로, 지표, 정상 종료 여부를 사용하며 전송 결과를 반환한다.
+        /// 항목이 없는 세션도 지표를 보내도록 첫 파트는 항상 전송한다.
+        /// </summary>
+        private static FileUploadOutcome UploadParts(LogUploader uploader, string path, MetricSample[] metrics, bool endedCleanly)
+        {
+            using (SessionFileReader reader = SessionFileReader.TryOpen(path))
+            {
+                if (reader == null)
+                    return FileUploadOutcome.Corrupt;
+
+                LogSessionHeader header = reader.Header;
+                int part = 0;
+                while (true)
+                {
+                    if (!reader.TryReadNext(MAX_BATCH_ENTRIES, MAX_BATCH_BYTES, out LogEntry[] entries, out bool reachedEnd))
+                        return FileUploadOutcome.Retry;
+
+                    UploadBatch batch = new UploadBatch
+                    {
+                        sessionId = header.sessionId,
+                        startedAtUtc = header.startedAtUtc,
+                        endedAtUtc = entries.Length > 0 ? entries[entries.Length - 1].timestampUtc : DateTime.UtcNow.ToString("o"),
+                        appVersion = header.appVersion,
+                        unityVersion = header.unityVersion,
+                        isEditor = header.isEditor,
+                        platform = header.platform,
+                        endedCleanly = endedCleanly,
+                        truncated = false,
+                        partIndex = part,
+                        metrics = metrics,
+                        entries = entries
+                    };
+
+                    UploadResult result = uploader.Upload(batch);
+                    if (result == UploadResult.Rejected)
+                        return FileUploadOutcome.Corrupt;
+                    if (result != UploadResult.Success)
+                        return FileUploadOutcome.Retry;
+
+                    if (reachedEnd)
+                        return FileUploadOutcome.Done;
+                    part++;
+                }
+            }
         }
 
         /// <summary>
@@ -807,24 +818,6 @@ namespace LogKit
                 default:
                     return LEVEL_INFO;
             }
-        }
-
-        /// <summary>
-        /// 캡처 상한 도달 사실을 알리는 마커 항목을 만든다.
-        /// 현재 설정을 사용하며, 경고 수준의 마커 LogEntry를 반환한다.
-        /// </summary>
-        private LogEntry CreateTruncationMarker()
-        {
-            return new LogEntry
-            {
-                timestampUtc = DateTime.UtcNow.ToString("o"),
-                level = LEVEL_WARNING,
-                category = MARKER_CATEGORY,
-                scene = GetCurrentSceneName(),
-                message = $"로그 캡처 상한 {_maxEntriesPerSession}건 도달. 이후 로그는 이 세션에 기록되지 않는다.",
-                dataJson = string.Empty,
-                stackTrace = string.Empty
-            };
         }
 
         /// <summary>

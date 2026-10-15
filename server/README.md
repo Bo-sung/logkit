@@ -94,7 +94,7 @@ curl -H "X-Api-Key: dev-log-key" http://localhost:5000/api/summary/2026-10.csv
 ### 업로드 요청 형식
 
 - 본문: gzip 압축(`Content-Encoding: gzip`) 또는 평문 JSON. gzip 해제 실패 시 400.
-- 긴 세션은 20,000건씩 파트로 나뉘며 `partIndex` 순서대로 도착한다.
+- 긴 세션은 20,000건 또는 4MB(압축 전) 단위 파트로 나뉘며 `partIndex` 순서대로 도착한다.
 - JSON 구조 (`UploadBatch`):
 
 | 필드 | 설명 |
@@ -103,8 +103,8 @@ curl -H "X-Api-Key: dev-log-key" http://localhost:5000/api/summary/2026-10.csv
 | startedAtUtc / endedAtUtc | 세션 시작·종료 시각(ISO 8601 UTC) |
 | appVersion / unityVersion / platform / isEditor | 실행 환경 정보 |
 | endedCleanly | 정상 종료 여부(강제 종료·크래시면 false) |
-| truncated | 세션 상한 초과로 일부 로그를 버렸는지 여부 |
-| partIndex | 0부터의 파트 번호(9999까지). 긴 세션은 20,000건씩 나뉘며 재전송 시 같은 파트를 다시 보낸다 |
+| truncated | 클라이언트가 일부 로그를 버렸는지 여부. 세션 상한이 없어진 v0.3.0부터 항상 false |
+| partIndex | 0부터의 파트 번호(9999까지). 긴 세션은 20,000건 또는 4MB(압축 전) 단위로 나뉘며 재전송 시 같은 파트를 다시 보낸다 |
 | metrics[] | 플레이 지표. key·count·sum. 비어 있으면 서버의 기존 지표를 유지 |
 | entries[] | timestampUtc, level, category, scene, message, dataJson, stackTrace |
 

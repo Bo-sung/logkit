@@ -12,7 +12,7 @@ logkit/
 ## 데이터 흐름
 
 ```
-Play 중 수집 → 5초마다 백그라운드 워커가 로컬 JSONL 기록 → 게임 종료 시 20,000건 단위 파트로 분할 gzip POST
+Play 중 수집 → 5초마다 백그라운드 워커가 로컬 JSONL 기록 → 게임 종료 시 파트(20,000건 또는 4MB 중 먼저 닿는 쪽)로 분할 gzip POST
 → 서버 검증(크기·키·gzip·JSON) → 파트별 저장 + 통합 CSV 재구성 + 월별 요약 재계산 + raw 보존
 → 클라이언트로 요약 JSON 응답 (실패 시 클라이언트가 .pending 보존 후 다음 기동 재전송 — 파트 전체 재전송, 서버 병합은 멱등)
 
@@ -26,10 +26,10 @@ Count/Measure로 모은 플레이 지표(공격 횟수 등)는 배치와 함께 
 Package Manager → `Add package from git URL`:
 
 ```
-https://github.com/Bo-sung/logkit.git?path=package#v0.2.1
+https://github.com/Bo-sung/logkit.git?path=package#v0.3.0
 ```
 
-- `#v0.2.1` 태그로 버전 고정을 권장한다. 최신이면 태그 부분을 생략한다.
+- `#v0.3.0` 태그로 버전 고정을 권장한다. 최신이면 태그 부분을 생략한다.
 - 오프라인 프로젝트는 `package/` 폴더를 대상 프로젝트의 `Packages/` 아래에 통째로 복사해도 된다(embedded package).
 
 ### 사용법
@@ -57,13 +57,15 @@ GameLogger.Measure("ComboLength", 5); // 콤보 길이 기록(횟수 + 합계 �
 | Release Server Url | `http://localhost:5000/api/logs` | 일반 빌드에서 사용 |
 | Api Key | `dev-log-key` | 서버 `ApiKey`와 일치해야 한다 |
 | Capture Unity Logs | true | `Debug.Log` 계열 자동 캡처 |
-| Max Entries Per Session | 100000 | 세션당 캡처 상한(총량 기준, 0 이하는 무제한). 초과분은 버리고 마커 1건. 전송은 20,000건씩 파트로 나눠 모두 보낸다 |
 | Flush Interval Seconds | 5 | 큐 → 로컬 파일 기록 주기 |
 | Upload On Quit | true | 종료 시 전송 |
 | Retry Pending On Startup | true | 기동 시 미전송 파일 재전송 |
 | Request Timeout Seconds | 5 | HTTP 타임아웃 |
 
 - 로컬 버퍼: `Application.persistentDataPath/Logs/{세션ID}.jsonl` + `{세션ID}.metrics.json` (전송 성공 시 함께 삭제)
+- 세션당 기록 상한은 없다. 로컬 파일은 세션 길이만큼 커지고, 전송 때 파일을 한 번만 순차로 읽으며 파트로 나눈다.
+- 파트는 20,000건 또는 항목 JSON 4MB(압축 전) 중 먼저 닿는 쪽에서 끊어 서버 본문 상한(기본 5MB gzip)을 넘지 않는다.
+- 통신 실패는 `.pending`으로 보존해 다음 기동에 재전송하고, 서버가 400·413으로 거부한 파일은 재시도하지 않고 `.corrupt`로 격리한다.
 - 파일 기록은 메인 스레드가 아닌 전용 워커 스레드가 담당한다. Update는 신호만 보낸다.
 - 대상 플랫폼: Windows 스탠드얼론(에디터 포함). WebGL은 스레드·동기 HTTP 제약으로 미지원
 
