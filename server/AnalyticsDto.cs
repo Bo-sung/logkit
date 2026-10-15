@@ -1,6 +1,6 @@
 namespace LogServer;
 
-/// <summary>GET /api/analytics 응답 본문. 범위 안의 세션을 버전별로 집계한 플레이 분석이다.</summary>
+/// <summary>GET /api/analytics 응답 본문. 범위 안의 모든 세션 로그를 앱 버전별로 누적 집계한 플레이 통계다.</summary>
 public sealed class AnalyticsResponse
 {
     /// <summary>조회한 월(yyyy-MM). 빈 문자열이면 전체 월.</summary>
@@ -9,62 +9,82 @@ public sealed class AnalyticsResponse
     /// <summary>에디터 세션을 제외했으면 true.</summary>
     public bool ExcludeEditor { get; set; }
 
-    /// <summary>습격 타임라인 구간 길이(초).</summary>
+    /// <summary>습격 타임라인 구간 길이(게임 시간 초).</summary>
     public int TimelineBinSeconds { get; set; }
 
     /// <summary>버전 오름차순 집계 목록.</summary>
     public List<VersionAnalytics> Versions { get; set; } = new();
 }
 
-/// <summary>버전 하나의 상점·습격 집계.</summary>
+/// <summary>
+/// 버전 하나의 누적 집계. 결측값은 0으로 바꾸지 않고 null로 둔다.
+/// </summary>
 public sealed class VersionAnalytics
 {
     public string Version { get; set; } = string.Empty;
-    public int Sessions { get; set; }
 
-    // 상점 운영
-    /// <summary>상점 시작 횟수(진행한 게임 일수 합계).</summary>
-    public int ShopDays { get; set; }
-    /// <summary>상점 시작~종료 평균 소요 시간(초).</summary>
-    public double? AvgDaySeconds { get; set; }
-    /// <summary>하루 평균 금액 증감(종료 금액 - 시작 금액).</summary>
-    public double? AvgMoneyGain { get; set; }
-    /// <summary>등장한 주문 수(작업대·손님·사격·완료 중 하나라도 기록된 주문).</summary>
-    public int Orders { get; set; }
-    public int CompletedOrders { get; set; }
-    /// <summary>완료 주문 중 성공 비율(0~1).</summary>
-    public double? SuccessRate { get; set; }
-    /// <summary>완료 주문 중 사망 비율(0~1).</summary>
-    public double? DeathRate { get; set; }
-    /// <summary>상점 사격 입력 총 횟수.</summary>
-    public int Shots { get; set; }
-    public double? AvgShotsPerOrder { get; set; }
-    /// <summary>주문당 사격 횟수 분포. 인덱스가 사격 횟수이고 마지막 칸은 그 이상.</summary>
-    public int[] ShotHistogram { get; set; } = Array.Empty<int>();
-    /// <summary>작업대를 쓴 주문의 주문당 작업대 체류 시간 평균(초).</summary>
-    public double? AvgWorkbenchSeconds { get; set; }
-    public double? AvgCustomerVisits { get; set; }
-    public int PresetSaves { get; set; }
-    public List<DayMoney> MoneyByDay { get; set; } = new();
-    public List<KeyCount> SubmittedGuns { get; set; } = new();
-    public List<KeyCount> PresetGuns { get; set; } = new();
+    // 세션
+    public int Sessions { get; set; }
+    /// <summary>세션 지속 시간 합계(초). 요약의 시작~종료 기준.</summary>
+    public double PlaySeconds { get; set; }
+    public int CleanEnds { get; set; }
+    public long LogRows { get; set; }
+    /// <summary>가장 이른·늦은 세션 시작(UTC, yyyy-MM-dd HH:mm:ss).</summary>
+    public string FirstSessionUtc { get; set; } = string.Empty;
+    public string LastSessionUtc { get; set; } = string.Empty;
+
+    // 상점 — Shop / 총 판매만 집계
+    public int Sales { get; set; }
+    public int SessionsWithSales { get; set; }
+    /// <summary>price가 기록된 판매 수. 판매액 평균의 분모.</summary>
+    public int PricedSales { get; set; }
+    public double Revenue { get; set; }
+    /// <summary>판매 조건 만족 비율(satisfied=true / satisfied가 기록된 판매). 전체 주문 성공률이 아니다.</summary>
+    public double? SatisfiedRate { get; set; }
+    /// <summary>판매별 판매액. 분포 차트용.</summary>
+    public List<double> Prices { get; set; } = new();
+    /// <summary>판매별 tagCount. 분포 차트용.</summary>
+    public List<int> TagCounts { get; set; } = new();
+
+    // 작업대 — 같은 씬의 시간순 진입→퇴장 쌍
+    public int WorkbenchVisits { get; set; }
+    public List<double> WorkbenchSeconds { get; set; } = new();
+    public int UnmatchedWorkbench { get; set; }
 
     // 야간 습격
-    public int RaidRuns { get; set; }
-    public int Escapes { get; set; }
-    /// <summary>탈출 성공 비율(0~1).</summary>
-    public double? EscapeRate { get; set; }
-    public double? AvgPlayTime { get; set; }
-    public double? AvgVaultReward { get; set; }
-    public double? AvgKills { get; set; }
-    public double? AvgEscapeHp { get; set; }
-    public List<KeyCount> RaidGuns { get; set; } = new();
-    public List<KeyCount> RaidModules { get; set; } = new();
-    /// <summary>스테이지별 블록 파괴 수.</summary>
-    public List<KeyCount> Blocks { get; set; } = new();
-    public List<EnemyStat> Enemies { get; set; } = new();
+    public int SessionsWithRaids { get; set; }
+    /// <summary>전체 스테이지 합계.</summary>
+    public RaidStat Raids { get; set; } = new();
+    /// <summary>스테이지(습격 씬)별 합계.</summary>
+    public List<RaidStat> Stages { get; set; } = new();
+    /// <summary>종료 이벤트 moduleCrateRewards의 모듈 보상 ID 빈도. 사망 후 실제 지급 여부는 알 수 없다.</summary>
+    public List<KeyCount> ModuleRewards { get; set; } = new();
     public List<TimelinePoint> Timeline { get; set; } = new();
     public List<Heatmap> Heatmaps { get; set; } = new();
+}
+
+/// <summary>습격 구간 합계. Scene이 비면 전체 스테이지 합계다.</summary>
+public sealed class RaidStat
+{
+    public string Scene { get; set; } = string.Empty;
+    public int Raids { get; set; }
+    /// <summary>종료 이벤트가 기록된 습격 수.</summary>
+    public int Ended { get; set; }
+    /// <summary>습격 시작 없이 시작된 구간 수(기록 누락).</summary>
+    public int WithoutStart { get; set; }
+    public int Survived { get; set; }
+    /// <summary>survived가 기록된 종료 중 생존 비율.</summary>
+    public double? SurvivedRate { get; set; }
+    /// <summary>종료 이벤트 duration 평균(게임 시간 초).</summary>
+    public double? AvgDuration { get; set; }
+    public double? AvgEndHealth { get; set; }
+    public double? AvgEnemyKills { get; set; }
+    public double? AvgModuleCrateCredits { get; set; }
+    public double? AvgMaterialCrateCredits { get; set; }
+    public int Blocks { get; set; }
+    public int EnemiesSpawned { get; set; }
+    public int EnemiesSpotted { get; set; }
+    public int EnemiesKilled { get; set; }
 }
 
 /// <summary>이름-횟수 한 쌍.</summary>
@@ -74,36 +94,20 @@ public sealed class KeyCount
     public int Count { get; set; }
 }
 
-/// <summary>게임 일수별 상점 종료 시 평균 금액.</summary>
-public sealed class DayMoney
-{
-    public int Day { get; set; }
-    public double AvgMoney { get; set; }
-    public int Samples { get; set; }
-}
-
-/// <summary>적 종류 하나의 생성·발견·처치 합계.</summary>
-public sealed class EnemyStat
-{
-    public string EnemyId { get; set; } = string.Empty;
-    public int Spawned { get; set; }
-    public int Spotted { get; set; }
-    public int Killed { get; set; }
-}
-
-/// <summary>습격 경과 시간 구간 하나의 평균 상태.</summary>
+/// <summary>습격 게임 시간 구간 하나의 평균 상태. 플레이어 상태 data_json.time 기준이다.</summary>
 public sealed class TimelinePoint
 {
-    /// <summary>구간 시작(습격 시작 기준 초).</summary>
+    /// <summary>구간 시작(게임 시간 초).</summary>
     public int Sec { get; set; }
-    public double? Hp { get; set; }
-    public double? Vaults { get; set; }
+    public double? Health { get; set; }
+    public double? ModuleCrates { get; set; }
+    public double? MaterialCrates { get; set; }
     public double? Tanks { get; set; }
-    public double? Helis { get; set; }
+    public double? Helicopters { get; set; }
     public int Samples { get; set; }
 }
 
-/// <summary>스테이지 하나의 위치 표본 밀도 격자. 범위는 전 버전 공통이다.</summary>
+/// <summary>스테이지 하나의 위치 표본 밀도 격자. 범위는 전 버전 공통이며 X·Z 동일 축척(정사각형)이다.</summary>
 public sealed class Heatmap
 {
     public string StageId { get; set; } = string.Empty;

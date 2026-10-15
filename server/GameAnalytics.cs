@@ -5,52 +5,45 @@ using System.Text.Json;
 namespace LogServer;
 
 /// <summary>
-/// 게임 이벤트 로그 규약. 클라이언트는 GameLogger.Data(level, 카테고리, 이벤트 이름, 데이터)로 기록하고
-/// 분석기는 category와 message(이벤트 이름)로 이벤트를 식별해 dataJson 필드를 읽는다.
-/// 기록 시각은 항목의 timestampUtc를 그대로 쓰므로 데이터에 시간 필드를 따로 넣지 않는다.
+/// 게임이 실제로 남기는 이벤트 이름. category와 message(한글 이벤트 이름)로 식별하고 data_json 필드를 읽는다.
+/// 집계 규칙은 ARMORY 대시보드(armory-dashboard/README.md)와 같다.
+/// Unity 콘솔 판매 출력([Customer] 총 판매 …)은 Shop 판매와 중복이므로 Unity 카테고리 전체를 무시한다.
 /// </summary>
 internal static class GameEvents
 {
     public const string ShopCategory = "Shop";
-    public const string RaidCategory = "Raid";
+    public const string WorkshopCategory = "Workshop";
+    public const string RaidCategory = "NightRaid";
 
-    // 상점 운영
-    public const string ShopStart = "ShopStart";               // day, money
-    public const string WorkbenchEnter = "WorkbenchEnter";     // orderId
-    public const string WorkbenchExit = "WorkbenchExit";       // orderId, gunCode
-    public const string CustomerInteract = "CustomerInteract"; // orderId
-    public const string OrderComplete = "OrderComplete";       // orderId, success, died, gunCode(선택)
-    public const string PresetSave = "PresetSave";             // gunCode
-    public const string Fire = "Fire";                         // orderId, gunCode
-    public const string ShopEnd = "ShopEnd";                   // day, money
+    public const string Sale = "총 판매";                    // price, satisfied, tagCount
+    public const string WorkbenchEnter = "작업대 진입";
+    public const string WorkbenchExit = "작업대 퇴장";
 
-    // 야간 습격
-    public const string RaidStart = "RaidStart";               // stageId, guns[], modules[](선택)
-    public const string RaidSample = "RaidSample";             // x, y, z, yaw, pitch, hp, vaults, tanks, helis
-    public const string BlockDestroyed = "BlockDestroyed";     // stageId, blockId
-    public const string EnemySpawn = "EnemySpawn";             // enemyId
-    public const string EnemySpotted = "EnemySpotted";         // enemyId
-    public const string EnemyKilled = "EnemyKilled";           // enemyId
-    public const string EscapeSuccess = "EscapeSuccess";       // playTime, vaultReward, kills, hp
+    public const string RaidStart = "습격 시작";              // scene
+    public const string PlayerState = "플레이어 상태";        // time, position{x,y,z}, cameraRotation, health, remainingModuleCrates, remainingMaterialCrates, tanks, helicopters
+    public const string BlockDestroyed = "블록 파괴";         // stageId, time, blockId
+    public const string EnemySpawn = "적 생성";               // time, enemyId
+    public const string EnemySpotted = "적 발견";             // time, enemyId
+    public const string EnemyKilled = "적 처치";              // time, enemyId
+
+    // 종료 이벤트: scene, survived, time, duration, moduleCrateRewards[], moduleCrateCredits, materialCrateCredits, enemyKills, health
+    public static readonly string[] RaidEnds = { "습격 사망", "탈출 성공", "습격 성공" };
 }
 
 /// <summary>
-/// 버전별 플레이 분석 집계기. 세션 CSV를 이벤트 규약에 따라 세션 요약(digest)으로 줄이고,
-/// 요약을 버전 단위로 합산해 대시보드 차트용 응답을 만든다.
+/// 버전별 누적 플레이 통계 집계기. 범위 안의 모든 세션 CSV를 실제 이벤트 규약으로 세션 요약(digest)으로 줄이고,
+/// 같은 앱 버전(appVersion)의 요약을 합산해 대시보드 차트용 응답을 만든다.
 /// 세션 요약은 CSV 수정 시각 기준으로 캐시해 같은 세션을 매 요청마다 다시 파싱하지 않는다.
 /// </summary>
 public sealed class GameAnalytics
 {
-    /// <summary>주문당 사격 횟수 분포의 구간 수. 마지막 구간은 그 이상을 모두 담는다.</summary>
-    public const int ShotBuckets = 11;
+    /// <summary>습격 상태 타임라인 구간 길이(게임 시간 초).</summary>
+    public const int TimelineBinSeconds = 5;
 
-    /// <summary>습격 타임라인 구간 길이(초).</summary>
-    public const int TimelineBinSeconds = 10;
-
-    private const int MAX_TIMELINE_BINS = 360;
+    private const int MAX_TIMELINE_BINS = 720;
     private const int HEATMAP_GRID = 64;
     private const int TOP_LIST_SIZE = 15;
-    private const string UNKNOWN = "(미지정)";
+    private const string UNKNOWN = "(미기록)";
 
     private readonly CsvSessionStore _store;
     private readonly SessionSummary _summary;
@@ -64,7 +57,7 @@ public sealed class GameAnalytics
     }
 
     /// <summary>
-    /// 범위 안의 세션을 버전별로 집계한다.
+    /// 범위 안의 세션을 버전별로 누적 집계한다.
     /// month(yyyy-MM, 비면 전체 월)와 excludeEditor를 사용하며, 버전 오름차순 집계 응답을 반환한다.
     /// </summary>
     public AnalyticsResponse Build(string? month, bool excludeEditor)
@@ -73,7 +66,7 @@ public sealed class GameAnalytics
             ? _summary.ListMonths().Select(info => info.Month).ToList()
             : new List<string> { month };
 
-        Dictionary<string, List<SessionDigest>> byVersion = new(StringComparer.Ordinal);
+        Dictionary<string, List<(SessionRow Row, SessionDigest Digest)>> byVersion = new(StringComparer.Ordinal);
         foreach (string m in months)
         {
             foreach (SessionRow row in _summary.GetMonthSessions(m))
@@ -90,17 +83,17 @@ public sealed class GameAnalytics
                 }
 
                 string version = string.IsNullOrEmpty(row.AppVersion) ? UNKNOWN : row.AppVersion;
-                if (!byVersion.TryGetValue(version, out List<SessionDigest>? list))
+                if (!byVersion.TryGetValue(version, out List<(SessionRow, SessionDigest)>? list))
                 {
-                    list = new List<SessionDigest>();
+                    list = new List<(SessionRow, SessionDigest)>();
                     byVersion[version] = list;
                 }
 
-                list.Add(digest);
+                list.Add((row, digest));
             }
         }
 
-        Dictionary<string, HeatmapBounds> bounds = ComputeHeatmapBounds(byVersion.Values.SelectMany(list => list));
+        Dictionary<string, HeatmapBounds> bounds = ComputeHeatmapBounds(byVersion.Values.SelectMany(list => list.Select(item => item.Digest)));
         List<string> versions = byVersion.Keys.ToList();
         versions.Sort(CompareVersions);
 
@@ -144,366 +137,321 @@ public sealed class GameAnalytics
     }
 
     /// <summary>
-    /// 한 세션의 로그 항목을 이벤트 규약에 따라 훑어 세션 요약으로 줄인다.
-    /// 규약에 맞지 않는 항목(일반 로그·Unity 로그)은 무시한다.
+    /// 한 세션의 로그 항목을 실제 이벤트 규약으로 훑어 세션 요약으로 줄인다.
+    /// 판매는 Shop / 총 판매만, 작업대 체류는 같은 씬의 시간순 진입→퇴장 쌍으로,
+    /// 습격은 습격 시작부터 종료 이벤트(또는 survived 필드)까지를 한 구간으로 본다. 규약 밖 항목은 무시한다.
     /// </summary>
     internal static SessionDigest Digest(List<LogEntry> entries)
     {
-        SessionDigest d = new();
-        (DateTime At, double? Money)? dayStart = null;
-        Dictionary<string, DateTime> workbenchEnter = new(StringComparer.Ordinal);
-        RaidState? raid = null;
-
-        foreach (LogEntry entry in entries)
+        List<(DateTime At, int Index, LogEntry Entry)> ordered = new(entries.Count);
+        for (int i = 0; i < entries.Count; i++)
         {
-            bool isShop = string.Equals(entry.Category, GameEvents.ShopCategory, StringComparison.OrdinalIgnoreCase);
-            bool isRaid = !isShop && string.Equals(entry.Category, GameEvents.RaidCategory, StringComparison.OrdinalIgnoreCase);
-            if (!isShop && !isRaid)
+            if (CsvSessionStore.TryParseUtc(entries[i].TimestampUtc, out DateTime at))
             {
-                continue;
+                ordered.Add((at, i, entries[i]));
             }
+        }
 
-            if (!CsvSessionStore.TryParseUtc(entry.TimestampUtc, out DateTime at))
-            {
-                continue;
-            }
+        ordered.Sort((a, b) => a.At != b.At ? a.At.CompareTo(b.At) : a.Index.CompareTo(b.Index));
 
+        SessionDigest d = new();
+        (DateTime At, string Scene)? openWorkbench = null;
+        RaidDigest? raid = null;
+
+        foreach ((DateTime at, _, LogEntry entry) in ordered)
+        {
             string name = entry.Message.Trim();
-            JsonElement data = ParseData(entry.DataJson);
-
-            if (isShop)
+            if (Is(entry.Category, GameEvents.ShopCategory))
             {
-                raid = null;
-                switch (name)
+                if (name != GameEvents.Sale)
                 {
-                    case GameEvents.ShopStart:
-                        d.ShopDays++;
-                        dayStart = (at, ReadDouble(data, "money"));
-                        break;
-
-                    case GameEvents.ShopEnd:
-                        double? endMoney = ReadDouble(data, "money");
-                        if (dayStart is { } start)
-                        {
-                            d.DaySeconds.Add((at - start.At).TotalSeconds);
-                            if (start.Money is double startMoney && endMoney is double gained)
-                            {
-                                d.MoneyGains.Add(gained - startMoney);
-                            }
-                        }
-
-                        if (ReadDouble(data, "day") is double day && endMoney is double money)
-                        {
-                            d.MoneyAtDayEnd[(int)day] = money;
-                        }
-
-                        dayStart = null;
-                        break;
-
-                    case GameEvents.WorkbenchEnter:
-                        workbenchEnter[ReadKey(data, "orderId")] = at;
-                        break;
-
-                    case GameEvents.WorkbenchExit:
-                    {
-                        string orderId = ReadKey(data, "orderId");
-                        OrderDigest order = d.Order(orderId);
-                        order.WorkbenchVisits++;
-                        if (workbenchEnter.Remove(orderId, out DateTime entered))
-                        {
-                            order.WorkbenchSeconds += (at - entered).TotalSeconds;
-                        }
-
-                        string gun = ReadString(data, "gunCode");
-                        if (gun.Length > 0)
-                        {
-                            order.LastBuiltGun = gun;
-                        }
-
-                        break;
-                    }
-
-                    case GameEvents.CustomerInteract:
-                        d.Order(ReadKey(data, "orderId")).CustomerVisits++;
-                        break;
-
-                    case GameEvents.OrderComplete:
-                    {
-                        OrderDigest order = d.Order(ReadKey(data, "orderId"));
-                        order.Completed = true;
-                        order.Success = ReadBool(data, "success");
-                        order.Died = ReadBool(data, "died");
-                        string gun = ReadString(data, "gunCode");
-                        order.SubmittedGun = gun.Length > 0 ? gun : order.LastBuiltGun;
-                        break;
-                    }
-
-                    case GameEvents.PresetSave:
-                        Increment(d.PresetGuns, ReadKeyOr(data, "gunCode"));
-                        break;
-
-                    case GameEvents.Fire:
-                        d.Shots++;
-                        string fireOrder = ReadString(data, "orderId");
-                        if (fireOrder.Length > 0)
-                        {
-                            d.Order(fireOrder).Shots++;
-                        }
-
-                        break;
+                    continue;
                 }
 
-                continue;
-            }
+                JsonElement data = ParseData(entry.DataJson);
+                d.Sales++;
+                if (ReadDouble(data, "price") is double price)
+                {
+                    d.Prices.Add(price);
+                }
 
-            if (name == GameEvents.RaidStart || raid == null)
-            {
-                raid = new RaidState { StartedAt = at };
-                d.RaidRuns++;
-            }
-
-            switch (name)
-            {
-                case GameEvents.RaidStart:
-                    raid.StageId = ReadKeyOr(data, "stageId");
-                    foreach (string gun in ReadStrings(data, "guns"))
+                if (TryGet(data, "satisfied", out JsonElement satisfied) && satisfied.ValueKind is JsonValueKind.True or JsonValueKind.False)
+                {
+                    d.SalesWithSatisfied++;
+                    if (satisfied.ValueKind == JsonValueKind.True)
                     {
-                        Increment(d.RaidGuns, gun);
+                        d.SatisfiedSales++;
+                    }
+                }
+
+                if (ReadDouble(data, "tagCount") is double tags)
+                {
+                    d.TagCounts.Add((int)tags);
+                }
+            }
+            else if (Is(entry.Category, GameEvents.WorkshopCategory))
+            {
+                if (name == GameEvents.WorkbenchEnter)
+                {
+                    if (openWorkbench != null)
+                    {
+                        d.UnmatchedWorkbench++;
                     }
 
-                    foreach (string module in ReadStrings(data, "modules"))
+                    openWorkbench = (at, entry.Scene);
+                }
+                else if (name == GameEvents.WorkbenchExit)
+                {
+                    if (openWorkbench is { } open && open.Scene == entry.Scene && at >= open.At)
                     {
-                        Increment(d.RaidModules, module);
+                        d.WorkbenchSeconds.Add((at - open.At).TotalSeconds);
+                        openWorkbench = null;
                     }
-
-                    break;
-
-                case GameEvents.RaidSample:
-                    AddSample(d, raid, at, data);
-                    break;
-
-                case GameEvents.BlockDestroyed:
-                    string blockStage = ReadString(data, "stageId");
-                    Increment(d.Blocks, blockStage.Length > 0 ? blockStage : raid.StageId);
-                    break;
-
-                case GameEvents.EnemySpawn:
-                    d.Enemy(ReadKeyOr(data, "enemyId")).Spawned++;
-                    break;
-
-                case GameEvents.EnemySpotted:
-                    d.Enemy(ReadKeyOr(data, "enemyId")).Spotted++;
-                    break;
-
-                case GameEvents.EnemyKilled:
-                    d.Enemy(ReadKeyOr(data, "enemyId")).Killed++;
-                    break;
-
-                case GameEvents.EscapeSuccess:
-                    d.Escapes.Add(new EscapeDigest
+                    else
                     {
-                        PlayTime = ReadDouble(data, "playTime") ?? (at - raid.StartedAt).TotalSeconds,
-                        VaultReward = ReadDouble(data, "vaultReward"),
-                        Kills = ReadDouble(data, "kills"),
-                        Hp = ReadDouble(data, "hp"),
-                    });
+                        d.UnmatchedWorkbench++;
+                    }
+                }
+            }
+            else if (Is(entry.Category, GameEvents.RaidCategory))
+            {
+                JsonElement data = ParseData(entry.DataJson);
+                if (name == GameEvents.RaidStart)
+                {
+                    raid = new RaidDigest { HasStart = true, Scene = ReadString(data, "scene") };
+                    d.Raids.Add(raid);
+                }
+                else if (raid == null)
+                {
+                    raid = new RaidDigest();
+                    d.Raids.Add(raid);
+                }
+
+                if (raid.Scene.Length == 0 && name != GameEvents.RaidStart)
+                {
+                    // 습격 시작은 씬 전환 전(Main)에 기록되므로 시작에 씬이 없으면 이후 첫 행의 씬을 습격 씬으로 쓴다.
+                    raid.Scene = entry.Scene;
+                }
+
+                ApplyRaidEvent(raid, name, data);
+                if (GameEvents.RaidEnds.Contains(name) || TryGet(data, "survived", out JsonElement s) && s.ValueKind is JsonValueKind.True or JsonValueKind.False)
+                {
+                    raid.Ended = true;
+                    raid.Survived = TryGet(data, "survived", out JsonElement survived) ? survived.ValueKind == JsonValueKind.True : null;
+                    raid.Duration = ReadDouble(data, "duration");
+                    raid.EnemyKills = ReadDouble(data, "enemyKills");
+                    raid.EndHealth = ReadDouble(data, "health");
+                    raid.ModuleCrateCredits = ReadDouble(data, "moduleCrateCredits");
+                    raid.MaterialCrateCredits = ReadDouble(data, "materialCrateCredits");
+                    raid.ModuleRewards.AddRange(ReadStrings(data, "moduleCrateRewards"));
                     raid = null;
-                    break;
+                }
+            }
+        }
+
+        if (openWorkbench != null)
+        {
+            d.UnmatchedWorkbench++;
+        }
+
+        foreach (RaidDigest r in d.Raids)
+        {
+            if (r.Scene.Length == 0)
+            {
+                r.Scene = UNKNOWN;
             }
         }
 
         return d;
     }
 
-    /// <summary>고정 주기 표본 하나를 위치 히트맵과 경과 시간 타임라인에 더한다.</summary>
-    private static void AddSample(SessionDigest d, RaidState raid, DateTime at, JsonElement data)
+    /// <summary>습격 구간 안의 상태·블록·적 이벤트 하나를 구간 요약에 더한다.</summary>
+    private static void ApplyRaidEvent(RaidDigest raid, string name, JsonElement data)
     {
-        if (ReadDouble(data, "x") is double x && ReadDouble(data, "z") is double z)
+        switch (name)
         {
-            if (!d.Positions.TryGetValue(raid.StageId, out List<float>? points))
-            {
-                points = new List<float>();
-                d.Positions[raid.StageId] = points;
-            }
+            case GameEvents.PlayerState:
+                if (ReadDouble(data, "time") is not double time
+                    || !TryGet(data, "position", out JsonElement position)
+                    || ReadDouble(position, "x") is not double x
+                    || ReadDouble(position, "z") is not double z)
+                {
+                    return;
+                }
 
-            points.Add((float)x);
-            points.Add((float)z);
+                raid.States++;
+                raid.Points.Add((float)x);
+                raid.Points.Add((float)z);
+                int bin = (int)(time / TimelineBinSeconds);
+                if (bin >= 0 && bin < MAX_TIMELINE_BINS)
+                {
+                    if (!raid.Timeline.TryGetValue(bin, out TimelineAccumulator? acc))
+                    {
+                        acc = new TimelineAccumulator();
+                        raid.Timeline[bin] = acc;
+                    }
+
+                    acc.AddSample();
+                    for (int slot = 0; slot < TimelineAccumulator.Fields.Length; slot++)
+                    {
+                        acc.Add(slot, ReadDouble(data, TimelineAccumulator.Fields[slot]));
+                    }
+                }
+
+                break;
+
+            case GameEvents.BlockDestroyed:
+                raid.Blocks++;
+                break;
+
+            case GameEvents.EnemySpawn:
+                raid.EnemiesSpawned++;
+                break;
+
+            case GameEvents.EnemySpotted:
+                raid.EnemiesSpotted++;
+                break;
+
+            case GameEvents.EnemyKilled:
+                raid.EnemiesKilled++;
+                break;
         }
-
-        int bin = (int)((at - raid.StartedAt).TotalSeconds / TimelineBinSeconds);
-        if (bin < 0 || bin >= MAX_TIMELINE_BINS)
-        {
-            return;
-        }
-
-        if (!d.Timeline.TryGetValue(bin, out TimelineAccumulator? acc))
-        {
-            acc = new TimelineAccumulator();
-            d.Timeline[bin] = acc;
-        }
-
-        acc.Add(0, ReadDouble(data, "hp"));
-        acc.Add(1, ReadDouble(data, "vaults"));
-        acc.Add(2, ReadDouble(data, "tanks"));
-        acc.Add(3, ReadDouble(data, "helis"));
     }
 
-    /// <summary>스테이지별 위치 범위를 전 버전 공통으로 구한다. 버전 간 히트맵을 같은 좌표로 비교하기 위함이다.</summary>
+    /// <summary>스테이지(습격 씬)별 위치 범위를 전 버전 공통으로 구한다. 버전 간 히트맵을 같은 좌표로 비교하기 위함이다.</summary>
     private static Dictionary<string, HeatmapBounds> ComputeHeatmapBounds(IEnumerable<SessionDigest> digests)
     {
         Dictionary<string, HeatmapBounds> bounds = new(StringComparer.Ordinal);
-        foreach (SessionDigest digest in digests)
+        foreach (RaidDigest raid in digests.SelectMany(d => d.Raids))
         {
-            foreach (KeyValuePair<string, List<float>> pair in digest.Positions)
+            if (raid.Points.Count == 0)
             {
-                if (!bounds.TryGetValue(pair.Key, out HeatmapBounds? b))
-                {
-                    b = new HeatmapBounds();
-                    bounds[pair.Key] = b;
-                }
-
-                List<float> points = pair.Value;
-                for (int i = 0; i + 1 < points.Count; i += 2)
-                {
-                    b.Include(points[i], points[i + 1]);
-                }
+                continue;
             }
+
+            if (!bounds.TryGetValue(raid.Scene, out HeatmapBounds? b))
+            {
+                b = new HeatmapBounds();
+                bounds[raid.Scene] = b;
+            }
+
+            for (int i = 0; i + 1 < raid.Points.Count; i += 2)
+            {
+                b.Include(raid.Points[i], raid.Points[i + 1]);
+            }
+        }
+
+        foreach (HeatmapBounds b in bounds.Values)
+        {
+            b.MakeSquare();
         }
 
         return bounds;
     }
 
-    /// <summary>한 버전에 속한 세션 요약을 합산해 버전 집계를 만든다.</summary>
-    private static VersionAnalytics Aggregate(string version, List<SessionDigest> digests, Dictionary<string, HeatmapBounds> bounds)
+    /// <summary>한 버전에 속한 세션 요약을 합산해 버전 누적 집계를 만든다.</summary>
+    private static VersionAnalytics Aggregate(
+        string version,
+        List<(SessionRow Row, SessionDigest Digest)> sessions,
+        Dictionary<string, HeatmapBounds> bounds)
     {
-        VersionAnalytics v = new() { Version = version, Sessions = digests.Count };
-        int[] shotHistogram = new int[ShotBuckets];
-        Dictionary<string, int> submittedGuns = new(StringComparer.Ordinal);
-        Dictionary<string, int> presetGuns = new(StringComparer.Ordinal);
-        Dictionary<string, int> raidGuns = new(StringComparer.Ordinal);
-        Dictionary<string, int> raidModules = new(StringComparer.Ordinal);
-        Dictionary<string, int> blocks = new(StringComparer.Ordinal);
-        Dictionary<string, EnemyStat> enemies = new(StringComparer.Ordinal);
-        Dictionary<int, (double Sum, int Count)> moneyByDay = new();
-        TimelineAccumulator[] timeline = new TimelineAccumulator[MAX_TIMELINE_BINS];
+        VersionAnalytics v = new() { Version = version, Sessions = sessions.Count };
+        List<double> prices = new();
+        List<int> tagCounts = new();
+        List<double> workbench = new();
+        Dictionary<string, StageAccumulator> stages = new(StringComparer.Ordinal);
+        Dictionary<string, int> moduleRewards = new(StringComparer.Ordinal);
+        TimelineAccumulator?[] timeline = new TimelineAccumulator?[MAX_TIMELINE_BINS];
         Dictionary<string, int[]> heat = new(StringComparer.Ordinal);
-        List<double> daySeconds = new();
-        List<double> moneyGains = new();
-        List<double> workbenchSeconds = new();
-        List<double> customerVisits = new();
-        List<EscapeDigest> escapes = new();
-        int completed = 0, successes = 0, deaths = 0, shots = 0;
+        List<RaidDigest> raids = new();
+        int satisfied = 0, withSatisfied = 0;
+        DateTime? first = null, last = null;
 
-        foreach (SessionDigest d in digests)
+        foreach ((SessionRow row, SessionDigest d) in sessions)
         {
-            v.ShopDays += d.ShopDays;
-            v.Shots += d.Shots;
-            v.RaidRuns += d.RaidRuns;
-            daySeconds.AddRange(d.DaySeconds);
-            moneyGains.AddRange(d.MoneyGains);
-            escapes.AddRange(d.Escapes);
-            MergeCounts(presetGuns, d.PresetGuns);
-            MergeCounts(raidGuns, d.RaidGuns);
-            MergeCounts(raidModules, d.RaidModules);
-            MergeCounts(blocks, d.Blocks);
-
-            foreach (KeyValuePair<int, double> pair in d.MoneyAtDayEnd)
+            v.PlaySeconds += row.DurationSec;
+            v.CleanEnds += row.EndedCleanly ? 1 : 0;
+            v.LogRows += row.Total;
+            if (CsvSessionStore.TryParseUtc(row.DateUtc, out DateTime started))
             {
-                moneyByDay.TryGetValue(pair.Key, out (double Sum, int Count) cur);
-                moneyByDay[pair.Key] = (cur.Sum + pair.Value, cur.Count + 1);
+                first = first == null || started < first ? started : first;
+                last = last == null || started > last ? started : last;
             }
 
-            foreach (OrderDigest order in d.Orders.Values)
+            v.Sales += d.Sales;
+            prices.AddRange(d.Prices);
+            tagCounts.AddRange(d.TagCounts);
+            satisfied += d.SatisfiedSales;
+            withSatisfied += d.SalesWithSatisfied;
+            workbench.AddRange(d.WorkbenchSeconds);
+            v.UnmatchedWorkbench += d.UnmatchedWorkbench;
+            if (d.Sales > 0)
             {
-                v.Orders++;
-                shotHistogram[Math.Min(order.Shots, ShotBuckets - 1)]++;
-                shots += order.Shots;
-                if (order.WorkbenchVisits > 0)
-                {
-                    workbenchSeconds.Add(order.WorkbenchSeconds);
-                }
-
-                customerVisits.Add(order.CustomerVisits);
-                if (!order.Completed)
-                {
-                    continue;
-                }
-
-                completed++;
-                if (order.Success)
-                {
-                    successes++;
-                }
-
-                if (order.Died)
-                {
-                    deaths++;
-                }
-
-                Increment(submittedGuns, string.IsNullOrEmpty(order.SubmittedGun) ? UNKNOWN : order.SubmittedGun);
+                v.SessionsWithSales++;
             }
 
-            foreach (KeyValuePair<string, EnemyDigest> pair in d.Enemies)
+            if (d.Raids.Count > 0)
             {
-                if (!enemies.TryGetValue(pair.Key, out EnemyStat? stat))
-                {
-                    stat = new EnemyStat { EnemyId = pair.Key };
-                    enemies[pair.Key] = stat;
-                }
-
-                stat.Spawned += pair.Value.Spawned;
-                stat.Spotted += pair.Value.Spotted;
-                stat.Killed += pair.Value.Killed;
+                v.SessionsWithRaids++;
             }
 
-            foreach (KeyValuePair<int, TimelineAccumulator> pair in d.Timeline)
+            raids.AddRange(d.Raids);
+        }
+
+        foreach (RaidDigest raid in raids)
+        {
+            if (!stages.TryGetValue(raid.Scene, out StageAccumulator? stage))
+            {
+                stage = new StageAccumulator();
+                stages[raid.Scene] = stage;
+            }
+
+            stage.Add(raid);
+            foreach (string reward in raid.ModuleRewards)
+            {
+                Increment(moduleRewards, reward);
+            }
+
+            foreach (KeyValuePair<int, TimelineAccumulator> pair in raid.Timeline)
             {
                 (timeline[pair.Key] ??= new TimelineAccumulator()).Merge(pair.Value);
             }
 
-            foreach (KeyValuePair<string, List<float>> pair in d.Positions)
+            if (raid.Points.Count > 0)
             {
-                HeatmapBounds b = bounds[pair.Key];
-                if (!heat.TryGetValue(pair.Key, out int[]? cells))
+                HeatmapBounds b = bounds[raid.Scene];
+                if (!heat.TryGetValue(raid.Scene, out int[]? cells))
                 {
                     cells = new int[HEATMAP_GRID * HEATMAP_GRID];
-                    heat[pair.Key] = cells;
+                    heat[raid.Scene] = cells;
                 }
 
-                List<float> points = pair.Value;
-                for (int i = 0; i + 1 < points.Count; i += 2)
+                for (int i = 0; i + 1 < raid.Points.Count; i += 2)
                 {
-                    cells[b.Row(points[i + 1], HEATMAP_GRID) * HEATMAP_GRID + b.Col(points[i], HEATMAP_GRID)]++;
+                    cells[b.Row(raid.Points[i + 1], HEATMAP_GRID) * HEATMAP_GRID + b.Col(raid.Points[i], HEATMAP_GRID)]++;
                 }
             }
         }
 
-        v.CompletedOrders = completed;
-        v.SuccessRate = completed > 0 ? (double)successes / completed : null;
-        v.DeathRate = completed > 0 ? (double)deaths / completed : null;
-        v.AvgShotsPerOrder = v.Orders > 0 ? (double)shots / v.Orders : null;
-        v.ShotHistogram = shotHistogram;
-        v.AvgDaySeconds = Average(daySeconds);
-        v.AvgMoneyGain = Average(moneyGains);
-        v.AvgWorkbenchSeconds = Average(workbenchSeconds);
-        v.AvgCustomerVisits = Average(customerVisits);
-        v.PresetSaves = presetGuns.Values.Sum();
-        v.MoneyByDay = moneyByDay.OrderBy(p => p.Key)
-            .Select(p => new DayMoney { Day = p.Key, AvgMoney = p.Value.Sum / p.Value.Count, Samples = p.Value.Count })
-            .ToList();
-        v.SubmittedGuns = Top(submittedGuns);
-        v.PresetGuns = Top(presetGuns);
-        v.RaidGuns = Top(raidGuns);
-        v.RaidModules = Top(raidModules);
-        v.Blocks = Top(blocks);
-        v.Enemies = enemies.Values.OrderByDescending(e => e.Spawned).ThenBy(e => e.EnemyId, StringComparer.Ordinal).ToList();
+        v.FirstSessionUtc = first?.ToString("yyyy-MM-dd HH:mm:ss", CultureInfo.InvariantCulture) ?? string.Empty;
+        v.LastSessionUtc = last?.ToString("yyyy-MM-dd HH:mm:ss", CultureInfo.InvariantCulture) ?? string.Empty;
+        v.Revenue = prices.Sum();
+        v.PricedSales = prices.Count;
+        v.Prices = prices;
+        v.TagCounts = tagCounts;
+        v.SatisfiedRate = withSatisfied > 0 ? (double)satisfied / withSatisfied : null;
+        v.WorkbenchVisits = workbench.Count;
+        v.WorkbenchSeconds = workbench;
 
-        v.Escapes = escapes.Count;
-        v.EscapeRate = v.RaidRuns > 0 ? (double)escapes.Count / v.RaidRuns : null;
-        v.AvgPlayTime = Average(escapes.Select(e => e.PlayTime));
-        v.AvgVaultReward = Average(escapes.Where(e => e.VaultReward.HasValue).Select(e => e.VaultReward!.Value));
-        v.AvgKills = Average(escapes.Where(e => e.Kills.HasValue).Select(e => e.Kills!.Value));
-        v.AvgEscapeHp = Average(escapes.Where(e => e.Hp.HasValue).Select(e => e.Hp!.Value));
+        RaidTotals all = new();
+        foreach (RaidDigest raid in raids)
+        {
+            all.Add(raid);
+        }
+
+        v.Raids = all.ToStat(string.Empty);
+        v.Stages = stages.OrderBy(p => p.Key, StringComparer.Ordinal).Select(p => p.Value.Totals.ToStat(p.Key)).ToList();
+        v.ModuleRewards = Top(moduleRewards);
 
         for (int i = 0; i < timeline.Length; i++)
         {
@@ -512,10 +460,11 @@ public sealed class GameAnalytics
                 v.Timeline.Add(new TimelinePoint
                 {
                     Sec = i * TimelineBinSeconds,
-                    Hp = acc.Avg(0),
-                    Vaults = acc.Avg(1),
-                    Tanks = acc.Avg(2),
-                    Helis = acc.Avg(3),
+                    Health = acc.Avg(0),
+                    ModuleCrates = acc.Avg(1),
+                    MaterialCrates = acc.Avg(2),
+                    Tanks = acc.Avg(3),
+                    Helicopters = acc.Avg(4),
                     Samples = acc.Samples,
                 });
             }
@@ -562,9 +511,11 @@ public sealed class GameAnalytics
         return 0;
     }
 
+    private static bool Is(string category, string expected) => string.Equals(category, expected, StringComparison.Ordinal);
+
     private static JsonElement ParseData(string dataJson)
     {
-        if (string.IsNullOrWhiteSpace(dataJson) || dataJson[0] != '{')
+        if (string.IsNullOrWhiteSpace(dataJson) || dataJson.TrimStart()[0] != '{')
         {
             return default;
         }
@@ -580,26 +531,18 @@ public sealed class GameAnalytics
         }
     }
 
-    /// <summary>객체에서 이름이 대소문자 무시로 일치하는 속성을 찾는다.</summary>
+    /// <summary>객체에서 이름이 정확히 일치하는 속성을 찾는다.</summary>
     private static bool TryGet(JsonElement data, string name, out JsonElement value)
     {
-        if (data.ValueKind == JsonValueKind.Object)
+        if (data.ValueKind == JsonValueKind.Object && data.TryGetProperty(name, out value))
         {
-            foreach (JsonProperty property in data.EnumerateObject())
-            {
-                if (string.Equals(property.Name, name, StringComparison.OrdinalIgnoreCase))
-                {
-                    value = property.Value;
-                    return true;
-                }
-            }
+            return true;
         }
 
         value = default;
         return false;
     }
 
-    /// <summary>문자열 또는 숫자 필드를 문자열로 읽는다. 없으면 빈 문자열.</summary>
     private static string ReadString(JsonElement data, string name)
     {
         if (!TryGet(data, name, out JsonElement value))
@@ -615,76 +558,30 @@ public sealed class GameAnalytics
         };
     }
 
-    /// <summary>주문 ID처럼 묶음 키로 쓰는 필드를 읽는다. 없으면 빈 키로 묶는다.</summary>
-    private static string ReadKey(JsonElement data, string name) => ReadString(data, name);
-
-    /// <summary>집계 표시용 키를 읽는다. 없으면 (미지정)으로 묶는다.</summary>
-    private static string ReadKeyOr(JsonElement data, string name)
-    {
-        string text = ReadString(data, name);
-        return text.Length > 0 ? text : UNKNOWN;
-    }
-
+    /// <summary>숫자 필드를 읽는다. 없거나 숫자가 아니면 null — 결측을 0으로 바꾸지 않는다.</summary>
     private static double? ReadDouble(JsonElement data, string name)
     {
-        if (!TryGet(data, name, out JsonElement value))
-        {
-            return null;
-        }
-
-        if (value.ValueKind == JsonValueKind.Number && value.TryGetDouble(out double number))
+        if (TryGet(data, name, out JsonElement value) && value.ValueKind == JsonValueKind.Number && value.TryGetDouble(out double number)
+            && double.IsFinite(number))
         {
             return number;
-        }
-
-        if (value.ValueKind == JsonValueKind.String
-            && double.TryParse(value.GetString(), NumberStyles.Float, CultureInfo.InvariantCulture, out double parsed))
-        {
-            return parsed;
         }
 
         return null;
     }
 
-    /// <summary>true/false, 0/1, "true" 형태를 모두 참·거짓으로 읽는다.</summary>
-    private static bool ReadBool(JsonElement data, string name)
-    {
-        if (!TryGet(data, name, out JsonElement value))
-        {
-            return false;
-        }
-
-        return value.ValueKind switch
-        {
-            JsonValueKind.True => true,
-            JsonValueKind.Number => value.TryGetDouble(out double n) && n != 0,
-            JsonValueKind.String => string.Equals(value.GetString(), "true", StringComparison.OrdinalIgnoreCase) || value.GetString() == "1",
-            _ => false,
-        };
-    }
-
-    /// <summary>문자열 배열 필드를 읽는다. 쉼표 구분 문자열도 배열로 받아들인다.</summary>
+    /// <summary>배열 필드의 원소를 문자열로 읽는다(숫자 ID는 원문 그대로).</summary>
     private static IEnumerable<string> ReadStrings(JsonElement data, string name)
     {
-        if (!TryGet(data, name, out JsonElement value))
+        if (!TryGet(data, name, out JsonElement value) || value.ValueKind != JsonValueKind.Array)
         {
             return Array.Empty<string>();
         }
 
-        if (value.ValueKind == JsonValueKind.Array)
-        {
-            return value.EnumerateArray()
-                .Select(item => item.ValueKind == JsonValueKind.String ? item.GetString()?.Trim() ?? string.Empty : item.GetRawText())
-                .Where(text => text.Length > 0)
-                .ToList();
-        }
-
-        if (value.ValueKind == JsonValueKind.String)
-        {
-            return (value.GetString() ?? string.Empty).Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
-        }
-
-        return Array.Empty<string>();
+        return value.EnumerateArray()
+            .Select(item => item.ValueKind == JsonValueKind.String ? item.GetString()?.Trim() ?? string.Empty : item.GetRawText())
+            .Where(text => text.Length > 0)
+            .ToList();
     }
 
     private static void Increment(Dictionary<string, int> map, string key)
@@ -693,47 +590,90 @@ public sealed class GameAnalytics
         map[key] = count + 1;
     }
 
-    private static void MergeCounts(Dictionary<string, int> target, Dictionary<string, int> source)
-    {
-        foreach (KeyValuePair<string, int> pair in source)
-        {
-            target.TryGetValue(pair.Key, out int count);
-            target[pair.Key] = count + pair.Value;
-        }
-    }
-
     private static List<KeyCount> Top(Dictionary<string, int> map)
     {
-        return map.OrderByDescending(p => p.Value).ThenBy(p => p.Key, StringComparer.Ordinal)
-            .Take(TOP_LIST_SIZE)
-            .Select(p => new KeyCount { Key = p.Key, Count = p.Value })
-            .Concat(map.Count > TOP_LIST_SIZE
-                ? new[] { new KeyCount { Key = "기타", Count = map.OrderByDescending(p => p.Value).ThenBy(p => p.Key, StringComparer.Ordinal).Skip(TOP_LIST_SIZE).Sum(p => p.Value) } }
-                : Array.Empty<KeyCount>())
-            .ToList();
-    }
-
-    private static double? Average(IEnumerable<double> values)
-    {
-        double sum = 0;
-        int count = 0;
-        foreach (double value in values)
+        List<KeyValuePair<string, int>> sorted = map.OrderByDescending(p => p.Value).ThenBy(p => p.Key, StringComparer.Ordinal).ToList();
+        List<KeyCount> top = sorted.Take(TOP_LIST_SIZE).Select(p => new KeyCount { Key = p.Key, Count = p.Value }).ToList();
+        if (sorted.Count > TOP_LIST_SIZE)
         {
-            sum += value;
-            count++;
+            top.Add(new KeyCount { Key = "기타", Count = sorted.Skip(TOP_LIST_SIZE).Sum(p => p.Value) });
         }
 
-        return count > 0 ? sum / count : null;
+        return top;
     }
 
-    /// <summary>진행 중인 습격 하나의 상태.</summary>
-    private sealed class RaidState
+    /// <summary>스테이지 하나의 습격 합계.</summary>
+    private sealed class StageAccumulator
     {
-        public DateTime StartedAt;
-        public string StageId = UNKNOWN;
+        public readonly RaidTotals Totals = new();
+
+        public void Add(RaidDigest raid) => Totals.Add(raid);
     }
 
-    /// <summary>스테이지 하나의 위치 범위.</summary>
+    /// <summary>습격 구간 여러 개의 합계. 결측값은 평균에서 빼고 표본 수를 따로 센다.</summary>
+    private sealed class RaidTotals
+    {
+        private int _raids, _ended, _survived, _survivedKnown, _withStart, _blocks, _spawned, _spotted, _killed;
+        private readonly List<double> _durations = new(), _endHealth = new(), _enemyKills = new(), _moduleCredits = new(), _materialCredits = new();
+
+        public void Add(RaidDigest raid)
+        {
+            _raids++;
+            _withStart += raid.HasStart ? 1 : 0;
+            _blocks += raid.Blocks;
+            _spawned += raid.EnemiesSpawned;
+            _spotted += raid.EnemiesSpotted;
+            _killed += raid.EnemiesKilled;
+            if (!raid.Ended)
+            {
+                return;
+            }
+
+            _ended++;
+            if (raid.Survived is bool survived)
+            {
+                _survivedKnown++;
+                _survived += survived ? 1 : 0;
+            }
+
+            AddIf(_durations, raid.Duration);
+            AddIf(_endHealth, raid.EndHealth);
+            AddIf(_enemyKills, raid.EnemyKills);
+            AddIf(_moduleCredits, raid.ModuleCrateCredits);
+            AddIf(_materialCredits, raid.MaterialCrateCredits);
+        }
+
+        public RaidStat ToStat(string scene) => new()
+        {
+            Scene = scene,
+            Raids = _raids,
+            Ended = _ended,
+            WithoutStart = _raids - _withStart,
+            Survived = _survived,
+            SurvivedRate = _survivedKnown > 0 ? (double)_survived / _survivedKnown : null,
+            AvgDuration = Average(_durations),
+            AvgEndHealth = Average(_endHealth),
+            AvgEnemyKills = Average(_enemyKills),
+            AvgModuleCrateCredits = Average(_moduleCredits),
+            AvgMaterialCrateCredits = Average(_materialCredits),
+            Blocks = _blocks,
+            EnemiesSpawned = _spawned,
+            EnemiesSpotted = _spotted,
+            EnemiesKilled = _killed,
+        };
+
+        private static void AddIf(List<double> list, double? value)
+        {
+            if (value is double v)
+            {
+                list.Add(v);
+            }
+        }
+
+        private static double? Average(List<double> values) => values.Count > 0 ? values.Average() : null;
+    }
+
+    /// <summary>스테이지 하나의 위치 범위. 축척을 맞추기 위해 정사각형으로 넓힌다.</summary>
     private sealed class HeatmapBounds
     {
         public double MinX = double.MaxValue, MaxX = double.MinValue, MinZ = double.MaxValue, MaxZ = double.MinValue;
@@ -744,6 +684,17 @@ public sealed class GameAnalytics
             MaxX = Math.Max(MaxX, x);
             MinZ = Math.Min(MinZ, z);
             MaxZ = Math.Max(MaxZ, z);
+        }
+
+        /// <summary>X·Z 축척을 같게 두도록 짧은 축을 가운데 기준으로 넓힌다.</summary>
+        public void MakeSquare()
+        {
+            double span = Math.Max(1, Math.Max(MaxX - MinX, MaxZ - MinZ));
+            double cx = (MinX + MaxX) / 2, cz = (MinZ + MaxZ) / 2;
+            MinX = cx - span / 2;
+            MaxX = cx + span / 2;
+            MinZ = cz - span / 2;
+            MaxZ = cz + span / 2;
         }
 
         public int Col(double x, int grid) => Cell(x, MinX, MaxX, grid);
@@ -758,95 +709,56 @@ public sealed class GameAnalytics
     }
 }
 
-/// <summary>한 세션을 이벤트 규약으로 줄인 요약. 버전 집계의 입력이며 CSV 수정 시각 기준으로 캐시된다.</summary>
+/// <summary>한 세션을 실제 이벤트 규약으로 줄인 요약. 버전 집계의 입력이며 CSV 수정 시각 기준으로 캐시된다.</summary>
 internal sealed class SessionDigest
 {
-    public int ShopDays;
-    public int Shots;
-    public readonly List<double> DaySeconds = new();
-    public readonly List<double> MoneyGains = new();
-    public readonly Dictionary<int, double> MoneyAtDayEnd = new();
-    public readonly Dictionary<string, OrderDigest> Orders = new(StringComparer.Ordinal);
-    public readonly Dictionary<string, int> PresetGuns = new(StringComparer.Ordinal);
+    public int Sales;
+    public int SatisfiedSales;
+    public int SalesWithSatisfied;
+    public readonly List<double> Prices = new();
+    public readonly List<int> TagCounts = new();
+    public readonly List<double> WorkbenchSeconds = new();
+    public int UnmatchedWorkbench;
+    public readonly List<RaidDigest> Raids = new();
+}
 
-    public int RaidRuns;
-    public readonly List<EscapeDigest> Escapes = new();
-    public readonly Dictionary<string, int> RaidGuns = new(StringComparer.Ordinal);
-    public readonly Dictionary<string, int> RaidModules = new(StringComparer.Ordinal);
-    public readonly Dictionary<string, int> Blocks = new(StringComparer.Ordinal);
-    public readonly Dictionary<string, EnemyDigest> Enemies = new(StringComparer.Ordinal);
-    public readonly Dictionary<string, List<float>> Positions = new(StringComparer.Ordinal);
+/// <summary>습격 한 구간(습격 시작 ~ 종료 이벤트)의 요약.</summary>
+internal sealed class RaidDigest
+{
+    public bool HasStart;
+    public string Scene = string.Empty;
+    public bool Ended;
+    public bool? Survived;
+    public double? Duration;
+    public double? EnemyKills;
+    public double? EndHealth;
+    public double? ModuleCrateCredits;
+    public double? MaterialCrateCredits;
+    public readonly List<string> ModuleRewards = new();
+    public int States;
+    public int Blocks;
+    public int EnemiesSpawned;
+    public int EnemiesSpotted;
+    public int EnemiesKilled;
+    public readonly List<float> Points = new();
     public readonly Dictionary<int, TimelineAccumulator> Timeline = new();
-
-    public OrderDigest Order(string orderId)
-    {
-        if (!Orders.TryGetValue(orderId, out OrderDigest? order))
-        {
-            order = new OrderDigest();
-            Orders[orderId] = order;
-        }
-
-        return order;
-    }
-
-    public EnemyDigest Enemy(string enemyId)
-    {
-        if (!Enemies.TryGetValue(enemyId, out EnemyDigest? enemy))
-        {
-            enemy = new EnemyDigest();
-            Enemies[enemyId] = enemy;
-        }
-
-        return enemy;
-    }
 }
 
-/// <summary>주문 하나의 진행 요약.</summary>
-internal sealed class OrderDigest
-{
-    public int Shots;
-    public int WorkbenchVisits;
-    public double WorkbenchSeconds;
-    public int CustomerVisits;
-    public bool Completed;
-    public bool Success;
-    public bool Died;
-    public string LastBuiltGun = string.Empty;
-    public string SubmittedGun = string.Empty;
-}
-
-/// <summary>탈출 성공 한 건.</summary>
-internal sealed class EscapeDigest
-{
-    public double PlayTime;
-    public double? VaultReward;
-    public double? Kills;
-    public double? Hp;
-}
-
-/// <summary>적 종류 하나의 생성·발견·처치 횟수.</summary>
-internal sealed class EnemyDigest
-{
-    public int Spawned;
-    public int Spotted;
-    public int Killed;
-}
-
-/// <summary>타임라인 구간 하나의 체력·금고·탱크·헬기 합계와 표본 수.</summary>
+/// <summary>타임라인 구간 하나의 상태 필드별 합계와 표본 수. 필드가 빠진 표본은 그 필드 평균에서 뺀다.</summary>
 internal sealed class TimelineAccumulator
 {
-    private readonly double[] _sums = new double[4];
-    private readonly int[] _counts = new int[4];
+    /// <summary>플레이어 상태 data_json에서 읽는 필드. 순서가 슬롯 번호다.</summary>
+    public static readonly string[] Fields = { "health", "remainingModuleCrates", "remainingMaterialCrates", "tanks", "helicopters" };
+
+    private readonly double[] _sums = new double[Fields.Length];
+    private readonly int[] _counts = new int[Fields.Length];
 
     public int Samples { get; private set; }
 
+    public void AddSample() => Samples++;
+
     public void Add(int slot, double? value)
     {
-        if (slot == 0)
-        {
-            Samples++;
-        }
-
         if (value is double v)
         {
             _sums[slot] += v;

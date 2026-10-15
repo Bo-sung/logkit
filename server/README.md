@@ -58,8 +58,8 @@ dotnet run        # http://0.0.0.0:5000 에서 대기
 | `DELETE /api/months/{yyyy-MM}` | 필요 | 200 JSON | 월 전체 세션·요약 삭제(없으면 404) |
 | `GET /api/summary/{yyyy-MM}.csv` | 필요 | 200 `text/csv` | 월별 요약 CSV 다운로드(없거나 형식이 틀리면 404) |
 | `GET /dashboard` | 불필요 | 200 `text/html` | 브라우저 열람 대시보드. `/`는 `/dashboard`로 리디렉션 |
-| `GET /analytics` | 불필요 | 200 `text/html` | 버전별 플레이 분석 페이지 |
-| `GET /api/analytics` | 필요 | 200 JSON | 게임 이벤트 로그를 앱 버전별로 집계. `month`(yyyy-MM, 생략 시 전체 기간), `excludeEditor=true`(에디터 세션 제외). 형식이 틀리면 400 |
+| `GET /analytics` | 불필요 | 200 `text/html` | 버전별 누적 통계 페이지 |
+| `GET /api/analytics` | 필요 | 200 JSON | 같은 앱 버전의 모든 세션 로그를 합산한 누적 통계. `month`(yyyy-MM, 생략 시 전체 기간), `excludeEditor=true`(에디터 세션 제외). 형식이 틀리면 400 |
 
 인증은 `X-Api-Key` 헤더 하나다. 브라우저 다운로드 링크처럼 헤더를 붙일 수 없는 요청은 `?key=API키` 쿼리로 대신할 수 있다. `/health`와 `/dashboard` 페이지 자체는 예외고, 대시보드가 부르는 `/api` 호출은 전부 검사한다.
 
@@ -91,43 +91,36 @@ curl -H "X-Api-Key: dev-log-key" http://localhost:5000/api/summary/2026-10.csv
 - **월 지표**: 세션 목록 위에 그 달 전체 지표 합계와 파생 지표(공격 명중률 등)가 표시된다(`/api/metrics`).
 - **내려받기/삭제**: 세션 CSV·raw gzip 내려받기, 세션 삭제, 월 전체 삭제(월 키 입력 확인).
 
-## 플레이 분석 (/analytics)
+## 버전별 누적 통계 (/analytics)
 
-`http://localhost:5000/analytics`(GM툴 상단 링크)에서 게임 이벤트 로그를 **앱 버전(`appVersion`)별로** 비교한다. API 키는 GM툴과 공유한다.
+GM툴이 세션 로그를 하나씩 보는 화면이라면, `http://localhost:5000/analytics`(GM툴 상단 링크)는 **같은 앱 버전(`appVersion`, 예: 0.1.2)의 모든 세션 로그를 합쳐** 버전끼리 비교한다. API 키는 GM툴과 공유한다.
 
-- **버전 선택**: 최대 8개 버전을 켜고 끈다. 색은 버전에 고정되어 선택을 바꿔도 남은 버전의 색이 바뀌지 않는다.
-- **핵심 지표 표**: 상점 일수·시간·금액 증감, 주문 성공률·사망률, 주문당 사격 횟수, 작업대 체류, 습격 탈출률·소요 시간·금고 보상·처치 수·잔여 체력.
-- **상점 운영**: 주문당 사격 테스트 횟수 분포(예상 횟수 입력 → 초과 비율), 게임 일수별 평균 금액, NPC 제출 총·프리셋 저장 총 비율.
-- **야간 습격**: 가져간 총·모듈 비율, 경과 시간별 평균 체력/금고/탱크/헬기, 스테이지별 블록 파괴, 적 종류별 생성·발견·처치, 스테이지별 위치 히트맵(버전별 나란히).
+- **버전 선택**: 최대 8개. 색은 버전에 고정되어 선택을 바꿔도 남은 버전의 색이 바뀌지 않는다. 월 단위·전체 기간, 에디터 세션 제외를 고를 수 있다.
+- **누적 지표 표**: 세션 수·기간·플레이 시간·정상 종료 비율 / 판매 건수·판매액·판매 조건 만족 비율·태그 수·작업대 체류 / 습격 수·생존 비율·소요 시간·습격당 블록 파괴와 적 생성·발견·처치·종료 체력·상자 크레딧. 세션 수가 버전마다 다르므로 세션당·습격당 값을 함께 보여 준다.
+- **상점**: 판매액 분포, 판매 태그 수 분포, 작업대 체류 시간 분포(버전 내 비율).
+- **습격**: 스테이지별 생존 비율, 게임 시간별 평균 상태(체력·남은 모듈 상자·남은 재료 상자·탱크·헬기), 스테이지별 습격 통계 표, 종료 보상 모듈 ID 비율, 스테이지별 위치 히트맵(X·Z 동일 축척, 버전별 나란히).
+- **미수집 항목**: 총기 코드·휴대 모듈·사격 테스트·주문 성공률은 로그에 없어 집계하지 않고 화면에 미수집으로 표시한다.
 
-집계는 세션 CSV를 이벤트 규약대로 훑어 만든다. 세션별 중간 결과는 CSV 수정 시각 기준으로 메모리에 캐시한다.
+세션별 중간 결과는 세션 CSV 수정 시각 기준으로 메모리에 캐시한다.
 
-### 이벤트 규약
+### 집계 기준 — 게임이 남기는 이벤트
 
-`GameLogger.Data("Info", 카테고리, 이벤트, 데이터)`로 기록한다. message가 이벤트 이름이고, 데이터 필드는 대소문자를 구분하지 않는다. 시간은 로그 시각(`timestampUtc`)을 그대로 쓰므로 데이터에 넣지 않아도 된다.
+category와 message(한글 이벤트 이름)로 식별하고 data_json 필드를 읽는다. 규칙은 `armory-dashboard/README.md`와 같다.
 
-| 카테고리 | 이벤트 | 데이터 필드 |
-| --- | --- | --- |
-| Shop | `ShopStart` / `ShopEnd` | `day`, `money` |
-| Shop | `WorkbenchEnter` | `orderId` |
-| Shop | `WorkbenchExit` | `orderId`, `gunCode` |
-| Shop | `CustomerInteract` | `orderId` |
-| Shop | `OrderComplete` | `orderId`, `success`, `died`, `gunCode`(선택 — 없으면 그 주문의 마지막 `WorkbenchExit` 총을 제출 총으로 본다) |
-| Shop | `PresetSave` | `gunCode` |
-| Shop | `Fire` | `orderId`, `gunCode` |
-| Raid | `RaidStart` | `stageId`, `guns`(배열), `modules`(배열, 선택) |
-| Raid | `RaidSample` | `x`, `y`, `z`, `yaw`, `pitch`, `hp`, `vaults`, `tanks`, `helis` — 고정 주기 표본 |
-| Raid | `BlockDestroyed` | `stageId`, `blockId` |
-| Raid | `EnemySpawn` / `EnemySpotted` / `EnemyKilled` | `enemyId` |
-| Raid | `EscapeSuccess` | `playTime`, `vaultReward`, `kills`, `hp` |
+| category | message | data_json | 집계 |
+| --- | --- | --- | --- |
+| Shop | 총 판매 | `price`, `satisfied`, `tagCount` | 판매·판매액. Unity 카테고리의 `[Customer] 총 판매 …` 출력은 중복이라 제외 |
+| Workshop | 작업대 진입 / 작업대 퇴장 | — | 같은 씬의 시간순 진입→퇴장 쌍만 체류 시간. 주문 ID가 없어 주문별로 연결하지 않음 |
+| NightRaid | 습격 시작 | `scene` | 습격 구간 시작. 씬 전환 전(Main)에 기록되므로 습격 씬은 `data_json.scene` |
+| NightRaid | 플레이어 상태 | `time`, `position{x,y,z}`, `cameraRotation`, `health`, `remainingModuleCrates`, `remainingMaterialCrates`, `tanks`, `helicopters` | 게임 시간 타임라인·위치 히트맵 |
+| NightRaid | 블록 파괴 | `stageId`, `time`, `blockId` | 습격당 파괴 수 |
+| NightRaid | 적 생성 / 적 발견 / 적 처치 | `time`, `enemyId` | 습격당 수. `enemyId`는 개체 ID라 종류로 묶지 않음 |
+| NightRaid | 습격 사망 / 탈출 성공 / 습격 성공 | `scene`, `survived`, `time`, `duration`, `enemyKills`, `health`, `moduleCrateRewards[]`, `moduleCrateCredits`, `materialCrateCredits` | 습격 구간 종료. 생존 비율·소요 시간·종료 값 평균 |
 
-```csharp
-[Serializable] class OrderCompleteData { public string orderId; public bool success; public bool died; public string gunCode; }
-GameLogger.Data("Info", "Shop", "OrderComplete", new OrderCompleteData { orderId = "3-1", success = true, gunCode = "AR-01" });
-```
-
-- 습격 한 판은 `RaidStart`부터 `EscapeSuccess`(탈출) 또는 다음 Shop 이벤트(실패)까지다. 탈출 성공률 = 탈출 / 습격 시작.
-- `RaidSample`을 FixedUpdate(기본 50Hz)마다 남기면 10분 습격 한 판에 3만 건이 넘는다. 세션 상한은 없지만 로컬 파일·전송량·서버 집계 비용이 함께 커지므로 0.2~0.5초 간격으로 솎아 기록하길 권장한다.
+- `timestamp_utc`(실제 시각)와 `data_json.time`(게임 시간)은 섞지 않는다. 습격 차트는 게임 시간 기준이다.
+- 기록되지 않은 값은 0으로 바꾸지 않고 `null`(화면에는 –)로 둔다. 종료 이벤트 없이 끝난 습격은 종료 기록 수에서 빠진다.
+- 모듈 상자·재료 상자는 따로 표시하고 다른 이름(금고 등)으로 바꾸지 않는다. 종료 보상은 기록값이며 사망 후 실제 지급 여부는 알 수 없다.
+- 플레이어 상태를 물리 프레임(0.02초)마다 남기면 10분 습격 한 판에 약 3만 행이 된다. 0.2~0.5초 간격으로 솎아 기록하길 권장한다.
 
 ## 대시보드가 없어도 되는 이유
 

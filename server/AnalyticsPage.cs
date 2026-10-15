@@ -1,7 +1,8 @@
 namespace LogServer;
 
 /// <summary>
-/// 버전별 플레이 분석 대시보드의 단일 페이지 HTML.
+/// 버전별 누적 플레이 통계 대시보드의 단일 페이지 HTML.
+/// GM툴이 세션 로그 하나씩을 보는 화면이라면, 이 페이지는 같은 앱 버전의 모든 세션 로그를 합쳐 비교한다.
 /// 외부 자산 없이 vanilla JS + SVG로 차트를 그리며 /api/analytics를 호출한다. API 키는 GM툴과 같은 localStorage 키를 공유한다.
 /// </summary>
 public static class AnalyticsPage
@@ -13,7 +14,7 @@ public static class AnalyticsPage
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>LogKit 분석</title>
+<title>LogKit 버전 통계</title>
 <style>
 :root {
   --bg: #0d1117; --panel: #161b22; --border: #30363d; --text: #e6edf3;
@@ -68,15 +69,19 @@ th, td { padding: 5px 10px; text-align: right; border-bottom: 1px solid var(--bo
 th:first-child, td:first-child { text-align: left; }
 th { position: sticky; top: 0; background: #1c2128; color: var(--muted); font-weight: 600; z-index: 1; }
 td.na { color: var(--muted); }
+tr.group td { background: #1c2128; color: var(--muted); font-size: 11.5px; letter-spacing: 1px; }
 .sw { display: inline-block; width: 9px; height: 9px; border-radius: 2px; margin-right: 6px; }
 .empty { padding: 18px; text-align: center; color: var(--muted); }
 #tip { position: fixed; pointer-events: none; z-index: 20; background: #1c2128; border: 1px solid var(--border);
   border-radius: 6px; padding: 6px 9px; font-size: 12px; white-space: pre; display: none; box-shadow: 0 4px 12px rgba(0,0,0,.4); }
 .heatgrid { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 12px; }
-.heatgrid canvas { width: 100%; height: auto; display: block; border: 1px solid var(--border); border-radius: 6px;
+.heatgrid canvas { width: 100%; aspect-ratio: 1; display: block; border: 1px solid var(--border); border-radius: 6px;
   image-rendering: pixelated; background: #0d1117; }
 .heatgrid .cap { font-size: 12px; margin-bottom: 4px; display: flex; align-items: center; }
 .ramp { height: 8px; width: 160px; border-radius: 4px; background: linear-gradient(90deg, #104281, #3987e5, #cde2fb); }
+.missing { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 8px; }
+.missing div { border: 1px dashed var(--border); border-radius: 6px; padding: 8px 10px; color: var(--muted); font-size: 12px; }
+.missing b { color: var(--text); display: block; font-weight: 600; }
 details summary { cursor: pointer; color: var(--muted); }
 details pre { font: 11.5px/1.6 Consolas, monospace; background: #0d1117; border: 1px solid var(--border);
   border-radius: 6px; padding: 10px; overflow: auto; }
@@ -84,8 +89,8 @@ details pre { font: 11.5px/1.6 Consolas, monospace; background: #0d1117; border:
 </head>
 <body>
 <header>
-  <div class="brand">LOGKIT<span>PLAY ANALYTICS</span></div>
-  <a href="/dashboard">GM 툴 →</a>
+  <div class="brand">LOGKIT<span>VERSION STATS</span></div>
+  <a href="/dashboard">GM 툴(세션별 로그) →</a>
   <div id="status" class="status"></div>
   <span class="spacer"></span>
   <select id="month"></select>
@@ -96,84 +101,89 @@ details pre { font: 11.5px/1.6 Consolas, monospace; background: #0d1117; border:
 <main>
   <section class="card wide">
     <div class="row" style="margin-bottom:6px">
-      <b>비교할 버전</b><span class="muted">(최대 8개 · 클릭해 켜고 끔)</span>
+      <b>비교할 버전</b><span class="muted">(앱 버전별로 모든 세션 로그를 합산 · 최대 8개 · 클릭해 켜고 끔)</span>
     </div>
     <div id="vchips" class="row"></div>
   </section>
 
   <section class="card wide">
-    <h3>버전별 핵심 지표</h3>
-    <p class="sub">상점은 완료 주문 기준 비율, 습격은 습격 시작 대비 탈출 비율입니다.</p>
+    <h3>버전별 누적 지표</h3>
+    <p class="sub">세션 수가 버전마다 다르므로 비교는 세션당·습격당 값을 보세요. 기록이 없는 값은 0이 아니라 –로 표시합니다.</p>
     <div id="kpi"></div>
   </section>
 
   <div class="section">상점 운영</div>
 
   <section class="card">
-    <h3>주문당 사격 테스트 횟수</h3>
-    <p class="sub">주문 비율 분포. 예상 횟수를 넘는 주문이 많으면 사격 테스트 요청이 지루할 수 있습니다.
-      예상 횟수 <input id="expected" type="number" min="0" max="10" value="3" style="width:56px;padding:2px 6px"></p>
-    <div id="c-shots" class="chart"></div>
+    <h3>판매액 분포</h3>
+    <p class="sub">Shop / 총 판매의 price · 버전 내 판매 비율 (Unity 콘솔 중복 출력 제외)</p>
+    <div id="c-price" class="chart"></div>
   </section>
 
   <section class="card">
-    <h3>게임 일수별 평균 보유 금액</h3>
-    <p class="sub">상점 종료 시점 금액의 평균</p>
-    <div id="c-money" class="chart"></div>
+    <h3>판매 태그 수 분포</h3>
+    <p class="sub">총 판매의 tagCount · 버전 내 판매 비율</p>
+    <div id="c-tags" class="chart"></div>
   </section>
 
   <section class="card">
-    <h3>NPC에게 제출한 총</h3>
-    <p class="sub">완료 주문의 제출 총기 코드 · 버전 내 비율</p>
-    <div id="c-submitted" class="chart"></div>
+    <h3>작업대 체류 시간 분포</h3>
+    <p class="sub">같은 씬의 시간순 진입 → 퇴장 쌍 · 버전 내 비율. 주문 ID가 없어 주문별로는 연결하지 않습니다.</p>
+    <div id="c-workbench" class="chart"></div>
   </section>
 
   <section class="card">
-    <h3>프리셋에 저장한 총</h3>
-    <p class="sub">프리셋 저장 총기 코드 · 버전 내 비율</p>
-    <div id="c-preset" class="chart"></div>
+    <h3>미수집 항목</h3>
+    <p class="sub">현재 로그에 없어 집계하지 않는 항목입니다. 추정값을 표시하지 않습니다.</p>
+    <div class="missing">
+      <div><b>제출 · 휴대 총기 코드</b>판매·습격 시작에 gunCode가 없음</div>
+      <div><b>모듈 구성</b>휴대 모듈 ID가 없음 (종료 보상 ID만 있음)</div>
+      <div><b>사격 테스트 · 사격 인풋</b>사격 이벤트가 없음</div>
+      <div><b>주문 성공률</b>주문 ID·전체 주문 수가 없음 — 판매 조건 만족과 다름</div>
+    </div>
   </section>
 
   <div class="section">야간 습격</div>
 
   <section class="card">
-    <h3>습격에 가져간 총</h3>
-    <p class="sub">RaidStart의 guns · 버전 내 비율</p>
-    <div id="c-raidguns" class="chart"></div>
+    <h3>스테이지별 생존 비율</h3>
+    <p class="sub">종료 이벤트의 survived 기준 · 막대 옆은 생존 / 종료 기록 습격 수</p>
+    <div id="c-survival" class="chart"></div>
   </section>
 
   <section class="card">
-    <h3>습격에 가져간 모듈</h3>
-    <p class="sub">RaidStart의 modules · 버전 내 비율</p>
-    <div id="c-modules" class="chart"></div>
-  </section>
-
-  <section class="card">
-    <h3>습격 경과 시간별 평균 상태</h3>
-    <p class="sub">고정 주기 표본(RaidSample)을 습격 시작 기준으로 묶은 평균
+    <h3>습격 게임 시간별 평균 상태</h3>
+    <p class="sub">플레이어 상태의 data_json.time을 구간으로 묶은 평균
       <select id="tlmetric" style="padding:2px 6px">
-        <option value="hp">체력</option><option value="vaults">남은 금고</option>
-        <option value="tanks">탱크 수</option><option value="helis">헬기 수</option>
+        <option value="health">체력</option><option value="moduleCrates">남은 모듈 상자</option>
+        <option value="materialCrates">남은 재료 상자</option><option value="tanks">탱크 수</option>
+        <option value="helicopters">헬기 수</option>
       </select></p>
     <div id="c-timeline" class="chart"></div>
   </section>
 
-  <section class="card">
-    <h3>스테이지별 블록 파괴</h3>
-    <p class="sub">습격 1회당 평균 파괴 블록 수</p>
-    <div id="c-blocks" class="chart"></div>
+  <section class="card wide">
+    <h3>스테이지별 습격 통계</h3>
+    <p class="sub">습격 구간 = 습격 시작 ~ 종료 이벤트. 블록·적 수는 습격당 평균, 종료 값은 종료 이벤트 기록의 평균입니다.</p>
+    <div id="t-stages"></div>
   </section>
 
-  <section class="card wide">
-    <h3>적 종류별 발견 · 처치</h3>
-    <p class="sub">발견률 = 발견 / 생성, 처치율 = 처치 / 생성</p>
-    <div id="t-enemies"></div>
+  <section class="card">
+    <h3>종료 보상 모듈 ID</h3>
+    <p class="sub">종료 이벤트 moduleCrateRewards · 버전 내 비율. 사망 후 실제 지급 여부는 알 수 없습니다.</p>
+    <div id="c-rewards" class="chart"></div>
+  </section>
+
+  <section class="card">
+    <h3>습격당 블록 파괴 · 적 처치</h3>
+    <p class="sub">전체 스테이지 합계를 습격 수로 나눈 값 · 단위가 달라 항목마다 축이 따로입니다</p>
+    <div id="c-perraid" class="chart"></div>
   </section>
 
   <section class="card wide">
     <div class="row" style="justify-content:space-between">
       <div><h3>플레이어 위치 히트맵</h3>
-        <p class="sub" style="margin:0">RaidSample의 x·z 밀도 · 버전 내 비율, 제곱근 스케일 · 위쪽이 +z</p></div>
+        <p class="sub" style="margin:0">플레이어 상태 position의 X·Z 밀도 · 동일 축척 · 버전 내 비율, 제곱근 스케일 · 위쪽이 +Z · 지형 데이터 없음</p></div>
       <div class="row"><span class="muted">스테이지</span><select id="stage"></select>
         <span class="muted">적음</span><span class="ramp"></span><span class="muted">많음</span></div>
     </div>
@@ -182,29 +192,22 @@ details pre { font: 11.5px/1.6 Consolas, monospace; background: #0d1117; border:
 
   <section class="card wide">
     <details>
-      <summary>로그 이벤트 규약 — 클라이언트에서 이 형식으로 기록해야 집계됩니다</summary>
-<pre>GameLogger.Data("Info", "&lt;카테고리&gt;", "&lt;이벤트&gt;", new XxxData { ... });   // 시간은 로그 시각을 그대로 사용
+      <summary>집계 기준 — 게임이 남기는 로그 이벤트</summary>
+<pre>버전은 세션의 appVersion(Application.version)입니다. 같은 버전의 모든 세션 로그를 합산합니다.
 
-카테고리 Shop
-  ShopStart         day, money
-  WorkbenchEnter    orderId
-  WorkbenchExit     orderId, gunCode
-  CustomerInteract  orderId
-  OrderComplete     orderId, success, died, gunCode(선택 — 없으면 마지막 WorkbenchExit의 gunCode를 제출 총으로 사용)
-  PresetSave        gunCode
-  Fire              orderId, gunCode
-  ShopEnd           day, money
+Shop      / 총 판매         price, satisfied, tagCount        (Unity / [Customer] 총 판매 … 는 중복 출력이므로 제외)
+Workshop  / 작업대 진입 · 작업대 퇴장                          (같은 씬의 시간순 진입→퇴장 쌍만 체류 시간으로 계산)
+NightRaid / 습격 시작        scene                            (씬 전환 전 Main에서 기록되므로 습격 씬은 data_json.scene)
+NightRaid / 플레이어 상태    time, position{x,y,z}, cameraRotation, health,
+                             remainingModuleCrates, remainingMaterialCrates, tanks, helicopters
+NightRaid / 블록 파괴        stageId, time, blockId
+NightRaid / 적 생성 · 적 발견 · 적 처치    time, enemyId      (enemyId는 개체 ID라 종류로 묶지 않음)
+NightRaid / 습격 사망 · 탈출 성공 · 습격 성공
+                             scene, survived, time, duration, enemyKills, health,
+                             moduleCrateRewards[], moduleCrateCredits, materialCrateCredits
 
-카테고리 Raid
-  RaidStart         stageId, guns[], modules[](선택)
-  RaidSample        x, y, z, yaw, pitch, hp, vaults, tanks, helis   (고정 주기 표본)
-  BlockDestroyed    stageId, blockId
-  EnemySpawn        enemyId
-  EnemySpotted      enemyId
-  EnemyKilled       enemyId
-  EscapeSuccess     playTime, vaultReward, kills, hp
-
-버전은 세션의 appVersion(Application.version)으로 나뉩니다.</pre>
+timestamp_utc(실제 시각)와 data_json.time(게임 시간)은 섞지 않습니다. 습격 차트는 게임 시간 기준입니다.
+모듈 상자 · 재료 상자는 별도로 표시하고 다른 이름(금고 등)으로 바꾸지 않습니다.</pre>
     </details>
   </section>
 </main>
@@ -234,12 +237,20 @@ async function api(path) {
   if (!res.ok) throw new Error("HTTP " + res.status + " " + (await res.text()).slice(0, 120));
   return res.json();
 }
-const num = (n, d = 1) => n == null ? "–" : Number(n).toLocaleString(undefined, { maximumFractionDigits: d });
-const pct = (r, d = 1) => r == null ? "–" : (r * 100).toFixed(d) + "%";
+const num = (n, d = 1) => n == null || !isFinite(n) ? "–" : Number(n).toLocaleString(undefined, { maximumFractionDigits: d });
+const pct = (r, d = 1) => r == null || !isFinite(r) ? "–" : (r * 100).toFixed(d) + "%";
+const ratio = (a, b) => b > 0 ? a / b : null;
 function dur(sec) {
-  if (sec == null) return "–";
+  if (sec == null || !isFinite(sec)) return "–";
   if (sec < 60) return sec.toFixed(1) + "초";
-  return Math.floor(sec / 60) + "분 " + Math.round(sec % 60) + "초";
+  if (sec < 3600) return Math.floor(sec / 60) + "분 " + Math.round(sec % 60) + "초";
+  return Math.floor(sec / 3600) + "시간 " + Math.round(sec % 3600 / 60) + "분";
+}
+function toLocal(ts) {
+  const m = String(ts || "").match(/^(\d{4})-(\d{2})-(\d{2})[T ](\d{2}):(\d{2}):(\d{2})/);
+  if (!m) return "–";
+  const d = new Date(Date.UTC(+m[1], +m[2] - 1, +m[3], +m[4], +m[5], +m[6]));
+  return d.toLocaleString("sv-SE").slice(0, 16);
 }
 function niceMax(v) {
   if (!(v > 0)) return 1;
@@ -285,77 +296,71 @@ function yAxis(W, top, plotH, left, max, fmt) {
   return s;
 }
 
-/** 범주 × 버전 세로 묶음 막대. values[v][c]는 0~1 비율. */
-function groupedColumns(el, cats, vs, valueOf, tipOf, marker) {
-  const W = widthOf(el), H = 240, left = 44, top = 10, bottom = 26;
+/** 버전별 값 목록을 구간 비율로 바꿔 세로 묶음 막대로 그린다. bucketOf(value) → 구간 인덱스. */
+function distribution(el, vs, valuesOf, cats, bucketOf, unit) {
+  const series = vs.map((v) => {
+    const counts = new Array(cats.length).fill(0);
+    const values = valuesOf(v);
+    values.forEach((x) => { const b = bucketOf(x); if (b >= 0 && b < cats.length) counts[b]++; });
+    return { v, counts, total: values.length };
+  }).filter((s) => s.total > 0);
+  if (series.length === 0) { el.innerHTML = emptyBox("기록된 데이터가 없습니다."); return; }
+  const W = widthOf(el), H = 240, left = 48, top = 10, bottom = 26;
   const plotW = W - left - 8, plotH = H - top - bottom;
   let max = 0;
-  vs.forEach((v) => cats.forEach((_, c) => { max = Math.max(max, valueOf(v, c) || 0); }));
+  series.forEach((s) => s.counts.forEach((c) => { max = Math.max(max, c / s.total); }));
   max = niceMax(max);
-  const groupW = plotW / cats.length;
-  const gap = 2;
-  const barW = Math.max(2, Math.min(18, (groupW * 0.78 - gap * (vs.length - 1)) / vs.length));
-  const usedW = barW * vs.length + gap * (vs.length - 1);
+  const groupW = plotW / cats.length, gap = 2;
+  const barW = Math.max(2, Math.min(18, (groupW * 0.78 - gap * (series.length - 1)) / series.length));
+  const usedW = barW * series.length + gap * (series.length - 1);
   let s = yAxis(W, top, plotH, left, max, (x) => num(x * 100, 1) + "%");
-  if (marker != null && marker < cats.length) {
-    const mx = left + groupW * (marker + 1);
-    s += '<line x1="' + mx + '" x2="' + mx + '" y1="' + top + '" y2="' + (top + plotH) +
-      '" stroke="var(--text)" stroke-width="1" stroke-dasharray="4 3" opacity="0.6"/>';
-    s += '<text class="lbl" x="' + (mx + 4) + '" y="' + (top + 10) + '">예상 초과 →</text>';
-  }
   cats.forEach((cat, c) => {
     const gx = left + groupW * c + (groupW - usedW) / 2;
-    vs.forEach((v, i) => {
-      const val = valueOf(v, c) || 0;
-      const h = plotH * val / max;
+    series.forEach((sr, i) => {
+      const share = sr.counts[c] / sr.total;
+      const h = plotH * share / max;
       const x = gx + i * (barW + gap);
-      s += '<path d="' + barUp(x, top + plotH - h, barW, h) + '" fill="' + color(v) + '"/>';
+      s += '<path d="' + barUp(x, top + plotH - h, barW, h) + '" fill="' + color(sr.v) + '"/>';
       s += '<rect x="' + (x - gap / 2) + '" y="' + top + '" width="' + (barW + gap) + '" height="' + plotH +
-        '" fill="transparent" data-tip="' + esc(tipOf(v, c)) + '"/>';
+        '" fill="transparent" data-tip="' + esc(sr.v.version + " · " + cat + "\n" + pct(share) + " (" + num(sr.counts[c], 0) + unit + " / " + num(sr.total, 0) + ")") + '"/>';
     });
     s += '<text x="' + (left + groupW * c + groupW / 2) + '" y="' + (H - 8) + '" text-anchor="middle">' + esc(cat) + "</text>";
   });
-  el.innerHTML = legend(vs) + '<svg viewBox="0 0 ' + W + " " + H + '">' + s + "</svg>";
+  el.innerHTML = legend(series.map((x) => x.v)) + '<svg viewBox="0 0 ' + W + " " + H + '">' + s + "</svg>";
 }
 
-/** 버전별 KeyCount 목록을 버전 내 비율로 바꿔 가로 묶음 막대로 그린다. */
-function shareBars(el, vs, listOf, unit, perRun) {
-  const totals = new Map(), keys = new Map();
-  vs.forEach((v) => {
-    const list = listOf(v);
-    const denom = perRun ? perRun(v) : list.reduce((a, k) => a + k.count, 0);
-    totals.set(v.version, denom);
-    list.forEach((k) => keys.set(k.key, (keys.get(k.key) || 0) + (denom > 0 ? k.count / denom : 0)));
-  });
-  const ordered = [...keys.entries()].sort((a, b) => b[1] - a[1]).map((e) => e[0]).slice(0, 12);
-  if (ordered.length === 0) { el.innerHTML = emptyBox("기록된 데이터가 없습니다."); return; }
-  const W = widthOf(el), labelW = 120, valueW = 92, barH = 8, gap = 2, rowPad = 10;
+/**
+ * 항목 × 버전 가로 묶음 막대. valueOf(v, key) → { value, label, tip } 또는 null(기록 없음).
+ * maxValue를 주면 그 값을 축 최대로 쓴다(비율이면 1). perKey면 항목마다 따로 축을 잡는다(단위가 다른 항목을 나열할 때).
+ */
+function hbars(el, vs, keys, valueOf, maxValue, perKey) {
+  if (keys.length === 0) { el.innerHTML = emptyBox("기록된 데이터가 없습니다."); return; }
+  const W = widthOf(el), labelW = 150, valueW = 110, barH = 8, gap = 2, rowPad = 10;
   const rowH = vs.length * barH + (vs.length - 1) * gap + rowPad;
-  const H = ordered.length * rowH + 4;
+  const H = keys.length * rowH + 4;
   const plotW = W - labelW - valueW;
-  let max = 0;
-  const valOf = (v, key) => {
-    const k = listOf(v).find((x) => x.key === key);
-    const d = totals.get(v.version);
-    return { count: k ? k.count : 0, share: k && d > 0 ? k.count / d : 0 };
-  };
-  ordered.forEach((key) => vs.forEach((v) => { max = Math.max(max, valOf(v, key).share); }));
+  let max = maxValue || 0;
+  if (!maxValue) keys.forEach((k) => vs.forEach((v) => { const r = valueOf(v, k); if (r) max = Math.max(max, r.value); }));
   max = max || 1;
   let s = "";
-  ordered.forEach((key, r) => {
+  keys.forEach((key, r) => {
     const y0 = r * rowH + 2;
+    if (perKey) {
+      max = 0;
+      vs.forEach((v) => { const rv = valueOf(v, key); if (rv) max = Math.max(max, rv.value); });
+      max = max || 1;
+    }
     s += '<text class="lbl" x="' + (labelW - 8) + '" y="' + (y0 + (rowH - rowPad) / 2 + 4) + '" text-anchor="end">' +
-      esc(key.length > 16 ? key.slice(0, 15) + "…" : key) + "<title>" + esc(key) + "</title></text>";
+      esc(key.length > 20 ? key.slice(0, 19) + "…" : key) + "<title>" + esc(key) + "</title></text>";
     vs.forEach((v, i) => {
-      const { count, share } = valOf(v, key);
+      const rv = valueOf(v, key);
       const y = y0 + i * (barH + gap);
-      const w = plotW * share / max;
-      s += '<path d="' + barRight(labelW, y, w, barH) + '" fill="' + color(v) + '"/>';
-      const tip = v.version + " · " + key + "\n" + (perRun ? num(share, 2) + unit : pct(share)) + " (" + num(count, 0) + "건)";
+      const w = rv ? plotW * rv.value / max : 0;
+      if (rv) s += '<path d="' + barRight(labelW, y, w, barH) + '" fill="' + color(v) + '"/>';
       s += '<rect x="' + labelW + '" y="' + (y - gap / 2) + '" width="' + (plotW + valueW) + '" height="' + (barH + gap) +
-        '" fill="transparent" data-tip="' + esc(tip) + '"/>';
-      if (vs.length <= 4 && share > 0) {
-        s += '<text x="' + (labelW + w + 6) + '" y="' + (y + barH - 0.5) + '">' + (perRun ? num(share, 2) : pct(share, 0)) + "</text>";
+        '" fill="transparent" data-tip="' + esc(v.version + " · " + key + "\n" + (rv ? rv.tip : "기록 없음")) + '"/>';
+      if (vs.length <= 4) {
+        s += '<text x="' + (labelW + w + 6) + '" y="' + (y + barH - 0.5) + '">' + esc(rv ? rv.label : "–") + "</text>";
       }
     });
   });
@@ -363,7 +368,7 @@ function shareBars(el, vs, listOf, unit, perRun) {
 }
 
 /** 버전별 (x, y) 점 목록을 선으로 그린다. */
-function lines(el, vs, pointsOf, xFmt, yFmt, tipOf, intX) {
+function lines(el, vs, pointsOf, xFmt, yFmt, tipOf) {
   const series = vs.map((v) => ({ v, pts: pointsOf(v).filter((p) => p.y != null) })).filter((s) => s.pts.length);
   if (series.length === 0) { el.innerHTML = emptyBox("기록된 데이터가 없습니다."); return; }
   const W = widthOf(el), H = 240, left = 52, top = 10, bottom = 26;
@@ -375,12 +380,9 @@ function lines(el, vs, pointsOf, xFmt, yFmt, tipOf, intX) {
   const sx = (x) => left + (x - minX) / (maxX - minX) * plotW;
   const sy = (y) => top + plotH - y / maxY * plotH;
   let s = yAxis(W, top, plotH, left, maxY, yFmt);
-  // 정수 축(게임 일수 등)은 범위가 좁으면 정수 위치에만 눈금을 둔다.
-  const xs = intX && maxX - minX <= 12
-    ? Array.from({ length: maxX - minX + 1 }, (_, i) => minX + i)
-    : Array.from({ length: 7 }, (_, i) => minX + (maxX - minX) * i / 6);
-  for (const x of xs) {
-    s +='<text x="' + sx(x) + '" y="' + (H - 8) + '" text-anchor="middle">' + esc(xFmt(x)) + "</text>";
+  for (let i = 0; i <= 6; i++) {
+    const x = minX + (maxX - minX) * i / 6;
+    s += '<text x="' + sx(x) + '" y="' + (H - 8) + '" text-anchor="middle">' + esc(xFmt(x)) + "</text>";
   }
   series.forEach(({ v, pts }) => {
     s += '<polyline fill="none" stroke="' + color(v) + '" stroke-width="2" stroke-linejoin="round" points="' +
@@ -397,55 +399,125 @@ function lines(el, vs, pointsOf, xFmt, yFmt, tipOf, intX) {
   el.innerHTML = legend(series.map((x) => x.v)) + '<svg viewBox="0 0 ' + W + " " + H + '">' + s + "</svg>";
 }
 
+function avg(list) { return list.length ? list.reduce((a, b) => a + b, 0) / list.length : null; }
+
 function renderKpi(vs) {
+  const R = (v) => v.raids;
   const rows = [
-    ["세션", (v) => num(v.sessions, 0)],
-    ["상점 일수", (v) => num(v.shopDays, 0)],
-    ["하루 평균 상점 시간", (v) => dur(v.avgDaySeconds)],
-    ["하루 평균 금액 증감", (v) => num(v.avgMoneyGain, 0)],
-    ["주문 수 (완료)", (v) => num(v.orders, 0) + " (" + num(v.completedOrders, 0) + ")"],
-    ["주문 성공률", (v) => pct(v.successRate)],
-    ["주문 사망률", (v) => pct(v.deathRate)],
-    ["주문당 평균 사격 횟수", (v) => num(v.avgShotsPerOrder, 2)],
-    ["예상 초과 사격 주문 비율", (v) => pct(overExpected(v))],
-    ["주문당 작업대 체류", (v) => dur(v.avgWorkbenchSeconds)],
-    ["주문당 손님 상호작용", (v) => num(v.avgCustomerVisits, 2)],
-    ["프리셋 저장", (v) => num(v.presetSaves, 0)],
-    ["습격 횟수", (v) => num(v.raidRuns, 0)],
-    ["탈출 성공률", (v) => pct(v.escapeRate)],
-    ["평균 탈출 소요 시간", (v) => dur(v.avgPlayTime)],
-    ["평균 금고 보상", (v) => num(v.avgVaultReward, 0)],
-    ["평균 처치 수", (v) => num(v.avgKills, 1)],
-    ["탈출 시 평균 체력", (v) => num(v.avgEscapeHp, 1)],
+    ["세션"],
+    ["세션 수", (v) => num(v.sessions, 0)],
+    ["기간 (로컬 시각)", (v) => toLocal(v.firstSessionUtc) + " ~ " + toLocal(v.lastSessionUtc).slice(5)],
+    ["플레이 시간 합계", (v) => dur(v.playSeconds)],
+    ["세션당 플레이 시간", (v) => dur(ratio(v.playSeconds, v.sessions))],
+    ["정상 종료 비율", (v) => pct(ratio(v.cleanEnds, v.sessions))],
+    ["상점"],
+    ["판매 건수", (v) => num(v.sales, 0)],
+    ["세션당 판매 건수", (v) => num(ratio(v.sales, v.sessions), 2)],
+    ["판매액 합계", (v) => num(v.revenue, 0)],
+    ["판매 1건 평균 판매액", (v) => num(ratio(v.revenue, v.pricedSales), 0)],
+    ["세션당 판매액", (v) => num(ratio(v.revenue, v.sessions), 0)],
+    ["판매 조건 만족 비율", (v) => pct(v.satisfiedRate)],
+    ["판매 1건 평균 태그 수", (v) => num(avg(v.tagCounts), 2)],
+    ["작업대 이용 (진입→퇴장 쌍)", (v) => num(v.workbenchVisits, 0)],
+    ["평균 작업대 체류", (v) => dur(avg(v.workbenchSeconds))],
+    ["짝 없는 진입·퇴장", (v) => num(v.unmatchedWorkbench, 0)],
+    ["야간 습격"],
+    ["습격 수", (v) => num(R(v).raids, 0)],
+    ["세션당 습격 수", (v) => num(ratio(R(v).raids, v.sessions), 2)],
+    ["종료 기록 / 시작 누락", (v) => num(R(v).ended, 0) + " / " + num(R(v).withoutStart, 0)],
+    ["생존 비율", (v) => pct(R(v).survivedRate)],
+    ["평균 소요 (게임 시간)", (v) => dur(R(v).avgDuration)],
+    ["습격당 블록 파괴", (v) => num(ratio(R(v).blocks, R(v).raids), 1)],
+    ["습격당 적 생성 / 발견 / 처치", (v) => [R(v).enemiesSpawned, R(v).enemiesSpotted, R(v).enemiesKilled].map((x) => num(ratio(x, R(v).raids), 2)).join(" / ")],
+    ["종료 기록 처치 수 평균", (v) => num(R(v).avgEnemyKills, 2)],
+    ["종료 체력 평균", (v) => num(R(v).avgEndHealth, 2)],
+    ["모듈 / 재료 상자 크레딧 평균", (v) => num(R(v).avgModuleCrateCredits, 0) + " / " + num(R(v).avgMaterialCrateCredits, 0)],
   ];
   let h = '<div class="tablewrap" style="max-height:none"><table><thead><tr><th>지표</th>' +
     vs.map((v) => '<th><span class="sw" style="background:' + color(v) + '"></span>' + esc(v.version) + "</th>").join("") +
     "</tr></thead><tbody>";
   for (const [label, f] of rows) {
+    if (!f) { h += '<tr class="group"><td colspan="' + (vs.length + 1) + '">' + esc(label) + "</td></tr>"; continue; }
     h += "<tr><td>" + esc(label) + "</td>" + vs.map((v) => {
       const t = f(v);
-      return "<td" + (t === "–" ? ' class="na"' : "") + ">" + esc(t) + "</td>";
+      return "<td" + (/^[–\s/]*$/.test(t) ? ' class="na"' : "") + ">" + esc(t) + "</td>";
     }).join("") + "</tr>";
   }
   $("kpi").innerHTML = h + "</tbody></table></div>";
 }
 
-function expected() { const n = parseInt($("expected").value, 10); return isNaN(n) ? 3 : Math.max(0, Math.min(9, n)); }
-function overExpected(v) {
-  const total = v.shotHistogram.reduce((a, b) => a + b, 0);
-  if (!total) return null;
-  return v.shotHistogram.slice(expected() + 1).reduce((a, b) => a + b, 0) / total;
+function renderShop(vs) {
+  let maxPrice = 0;
+  vs.forEach((v) => v.prices.forEach((p) => { maxPrice = Math.max(maxPrice, p); }));
+  const step = niceMax(maxPrice / 8 || 1);
+  const bins = Math.max(1, Math.ceil((maxPrice + 1e-9) / step));
+  const short = (x) => x >= 1000 ? num(x / 1000, 1) + "k" : num(x, 0);
+  const priceCats = Array.from({ length: bins }, (_, i) => short(i * step) + "~");
+  distribution($("c-price"), vs, (v) => v.prices, priceCats, (p) => Math.min(bins - 1, Math.floor(p / step)), "건");
+
+  distribution($("c-tags"), vs, (v) => v.tagCounts, ["0", "1", "2", "3", "4+"], (t) => Math.min(4, Math.max(0, t)), "건");
+
+  const edges = [5, 15, 30, 60];
+  distribution($("c-workbench"), vs, (v) => v.workbenchSeconds, ["~5초", "5~15초", "15~30초", "30~60초", "60초~"],
+    (s) => { const i = edges.findIndex((e) => s < e); return i < 0 ? edges.length : i; }, "회");
 }
 
-function renderShots(vs) {
-  const el = $("c-shots");
-  if (!vs.some((v) => v.orders > 0)) { el.innerHTML = emptyBox("주문 기록이 없습니다."); return; }
-  const n = vs[0].shotHistogram.length;
-  const cats = Array.from({ length: n }, (_, i) => i === n - 1 ? i + "+" : String(i));
-  const share = (v, c) => { const t = v.shotHistogram.reduce((a, b) => a + b, 0); return t ? v.shotHistogram[c] / t : 0; };
-  groupedColumns(el, cats, vs, share,
-    (v, c) => v.version + " · 사격 " + cats[c] + "회\n" + pct(share(v, c)) + " (" + num(v.shotHistogram[c], 0) + "주문)",
-    expected());
+function renderRaid(vs) {
+  const stages = [...new Set(vs.flatMap((v) => v.stages.map((s) => s.scene)))].sort();
+  const stageOf = (v, scene) => v.stages.find((s) => s.scene === scene);
+  hbars($("c-survival"), vs, stages, (v, scene) => {
+    const s = stageOf(v, scene);
+    if (!s || s.survivedRate == null) return null;
+    return { value: s.survivedRate, label: pct(s.survivedRate, 0) + " · " + s.survived + "/" + s.ended,
+      tip: "생존 " + pct(s.survivedRate) + " (" + s.survived + " / 종료 " + s.ended + "회)" };
+  }, 1);
+
+  const metric = $("tlmetric").value;
+  const metricName = $("tlmetric").selectedOptions[0].textContent;
+  lines($("c-timeline"), vs, (v) => v.timeline.map((t) => ({ x: t.sec, y: t[metric], n: t.samples })),
+    (x) => Math.round(x) + "s", (y) => num(y, 2),
+    (v, p) => v.version + " · 게임 " + p.x + "~" + (p.x + state.data.timelineBinSeconds) + "초\n" + metricName + " 평균 " + num(p.y, 2) + " (표본 " + num(p.n, 0) + ")");
+
+  let h = '<div class="tablewrap"><table><thead><tr><th>스테이지</th><th>버전</th><th>습격</th><th>종료 기록</th><th>생존 비율</th>' +
+    "<th>평균 소요</th><th>습격당 블록 파괴</th><th>습격당 적 생성</th><th>습격당 적 발견</th><th>습격당 적 처치</th>" +
+    "<th>종료 체력</th><th>모듈 상자 크레딧</th><th>재료 상자 크레딧</th></tr></thead><tbody>";
+  for (const scene of stages) {
+    for (const v of vs) {
+      const s = stageOf(v, scene);
+      if (!s) continue;
+      const per = (x) => num(ratio(x, s.raids), 2);
+      h += "<tr><td>" + esc(scene) + '</td><td><span class="sw" style="background:' + color(v) + '"></span>' + esc(v.version) +
+        "</td><td>" + num(s.raids, 0) + "</td><td>" + num(s.ended, 0) + "</td><td>" + pct(s.survivedRate) +
+        "</td><td>" + dur(s.avgDuration) + "</td><td>" + per(s.blocks) + "</td><td>" + per(s.enemiesSpawned) +
+        "</td><td>" + per(s.enemiesSpotted) + "</td><td>" + per(s.enemiesKilled) + "</td><td>" + num(s.avgEndHealth, 2) +
+        "</td><td>" + num(s.avgModuleCrateCredits, 0) + "</td><td>" + num(s.avgMaterialCrateCredits, 0) + "</td></tr>";
+    }
+  }
+  $("t-stages").innerHTML = stages.length ? h + "</tbody></table></div>" : emptyBox("습격 기록이 없습니다.");
+
+  const rewardKeys = [];
+  const rewardTotal = new Map();
+  vs.forEach((v) => {
+    const total = v.moduleRewards.reduce((a, k) => a + k.count, 0);
+    rewardTotal.set(v.version, total);
+    v.moduleRewards.forEach((k) => { if (!rewardKeys.includes(k.key)) rewardKeys.push(k.key); });
+  });
+  hbars($("c-rewards"), vs, rewardKeys.slice(0, 12), (v, key) => {
+    const k = v.moduleRewards.find((x) => x.key === key);
+    const total = rewardTotal.get(v.version);
+    if (!k || !total) return null;
+    return { value: k.count / total, label: pct(k.count / total, 0), tip: pct(k.count / total) + " (" + k.count + " / " + total + "건)" };
+  });
+
+  const per = [["습격당 블록 파괴", (r) => r.blocks], ["습격당 적 처치 (이벤트)", (r) => r.enemiesKilled]];
+  hbars($("c-perraid"), vs, per.map((p) => p[0]), (v, key) => {
+    const f = per.find((p) => p[0] === key)[1];
+    const val = ratio(f(v.raids), v.raids.raids);
+    if (val == null) return null;
+    return { value: val, label: num(val, 2), tip: num(val, 2) + " (" + num(f(v.raids), 0) + " / 습격 " + v.raids.raids + "회)" };
+  }, 0, true);
+
+  renderHeat(vs);
 }
 
 function renderHeat(vs) {
@@ -456,14 +528,13 @@ function renderHeat(vs) {
   if (stages.includes(prev)) sel.value = prev;
   const stage = sel.value;
   const box = $("heat");
-  if (!stage) { box.innerHTML = emptyBox("RaidSample 위치 표본이 없습니다."); return; }
+  if (!stage) { box.innerHTML = emptyBox("플레이어 상태 위치 표본이 없습니다."); return; }
   const maps = vs.map((v) => ({ v, h: v.heatmaps.find((x) => x.stageId === stage) }));
   let maxShare = 0;
   maps.forEach(({ h }) => {
     if (!h) return;
-    const total = h.cells.reduce((a, b) => a + b, 0);
-    h._total = total;
-    h.cells.forEach((c) => { if (total) maxShare = Math.max(maxShare, c / total); });
+    h._total = h.cells.reduce((a, b) => a + b, 0);
+    h.cells.forEach((c) => { if (h._total) maxShare = Math.max(maxShare, c / h._total); });
   });
   box.innerHTML = "";
   for (const { v, h } of maps) {
@@ -472,23 +543,20 @@ function renderHeat(vs) {
       '<span class="muted" style="margin-left:6px">' + (h ? num(h._total, 0) + " 표본" : "표본 없음") + "</span></div>";
     if (h) {
       const cv = document.createElement("canvas");
-      const spanX = h.maxX - h.minX || 1, spanZ = h.maxZ - h.minZ || 1;
       cv.width = h.grid; cv.height = h.grid;
-      cv.style.aspectRatio = Math.max(0.4, Math.min(2.5, spanX / spanZ)).toFixed(3);
       const ctx = cv.getContext("2d");
       const img = ctx.createImageData(h.grid, h.grid);
       for (let r = 0; r < h.grid; r++) {
         for (let c = 0; c < h.grid; c++) {
           const val = h.cells[r * h.grid + c];
           if (!val) continue;
-          const t = Math.sqrt(val / h._total / maxShare);
-          const rgb = ramp(t);
+          const rgb = ramp(Math.sqrt(val / h._total / maxShare));
           const i = ((h.grid - 1 - r) * h.grid + c) * 4;
           img.data[i] = rgb[0]; img.data[i + 1] = rgb[1]; img.data[i + 2] = rgb[2]; img.data[i + 3] = 255;
         }
       }
       ctx.putImageData(img, 0, 0);
-      cv.title = "x " + num(h.minX) + " ~ " + num(h.maxX) + ", z " + num(h.minZ) + " ~ " + num(h.maxZ);
+      cv.title = "X " + num(h.minX) + " ~ " + num(h.maxX) + ", Z " + num(h.minZ) + " ~ " + num(h.maxZ);
       wrap.appendChild(cv);
     }
     box.appendChild(wrap);
@@ -502,48 +570,17 @@ function ramp(t) {
   return RAMP[i].map((a, k) => Math.round(a + (RAMP[i + 1][k] - a) * f));
 }
 
-function renderEnemies(vs) {
-  const ids = [...new Set(vs.flatMap((v) => v.enemies.map((e) => e.enemyId)))].sort();
-  if (ids.length === 0) { $("t-enemies").innerHTML = emptyBox("적 이벤트 기록이 없습니다."); return; }
-  let h = '<div class="tablewrap"><table><thead><tr><th>적 ID</th><th>버전</th><th>생성</th><th>발견</th><th>처치</th><th>발견률</th><th>처치율</th></tr></thead><tbody>';
-  for (const id of ids) {
-    for (const v of vs) {
-      const e = v.enemies.find((x) => x.enemyId === id);
-      if (!e) continue;
-      h += "<tr><td>" + esc(id) + '</td><td><span class="sw" style="background:' + color(v) + '"></span>' + esc(v.version) +
-        "</td><td>" + num(e.spawned, 0) + "</td><td>" + num(e.spotted, 0) + "</td><td>" + num(e.killed, 0) +
-        "</td><td>" + pct(e.spawned ? e.spotted / e.spawned : null) + "</td><td>" + pct(e.spawned ? e.killed / e.spawned : null) + "</td></tr>";
-    }
-  }
-  $("t-enemies").innerHTML = h + "</tbody></table></div>";
-}
-
 function render() {
   const vs = selectedVersions();
-  const charts = ["c-shots", "c-money", "c-submitted", "c-preset", "c-raidguns", "c-modules", "c-timeline", "c-blocks"];
+  const charts = ["c-price", "c-tags", "c-workbench", "c-survival", "c-timeline", "c-rewards", "c-perraid", "t-stages", "heat"];
   if (vs.length === 0) {
     $("kpi").innerHTML = emptyBox(state.data && state.data.versions.length ? "비교할 버전을 선택하세요." : "범위 안에 세션이 없습니다.");
     charts.forEach((id) => { $(id).innerHTML = ""; });
-    $("t-enemies").innerHTML = ""; $("heat").innerHTML = "";
     return;
   }
   renderKpi(vs);
-  renderShots(vs);
-  lines($("c-money"), vs, (v) => v.moneyByDay.map((d) => ({ x: d.day, y: d.avgMoney, n: d.samples })),
-    (x) => Math.round(x) + "일", (y) => num(y, 0),
-    (v, p) => v.version + " · " + p.x + "일차\n평균 " + num(p.y, 0) + " (" + p.n + "세션)", true);
-  shareBars($("c-submitted"), vs, (v) => v.submittedGuns);
-  shareBars($("c-preset"), vs, (v) => v.presetGuns);
-  shareBars($("c-raidguns"), vs, (v) => v.raidGuns);
-  shareBars($("c-modules"), vs, (v) => v.raidModules);
-  shareBars($("c-blocks"), vs, (v) => v.blocks, "개/습격", (v) => v.raidRuns);
-  const metric = $("tlmetric").value;
-  const metricName = $("tlmetric").selectedOptions[0].textContent;
-  lines($("c-timeline"), vs, (v) => v.timeline.map((t) => ({ x: t.sec, y: t[metric], n: t.samples })),
-    (x) => Math.floor(x / 60) + ":" + String(Math.round(x % 60)).padStart(2, "0"), (y) => num(y, 1),
-    (v, p) => v.version + " · " + Math.floor(p.x / 60) + "분 " + (p.x % 60) + "초\n" + metricName + " " + num(p.y, 2) + " (표본 " + p.n + ")");
-  renderEnemies(vs);
-  renderHeat(vs);
+  renderShop(vs);
+  renderRaid(vs);
 }
 
 function renderChips() {
@@ -635,14 +672,12 @@ $("key").addEventListener("keydown", (ev) => { if (ev.key === "Enter") load(); }
 $("month").onchange = load;
 $("noeditor").onchange = load;
 $("tlmetric").onchange = render;
-$("stage").onchange = render;
-$("expected").oninput = () => { savePrefs({ expected: $("expected").value }); render(); };
+$("stage").onchange = () => renderHeat(selectedVersions());
 let resizeTimer = 0;
 window.addEventListener("resize", () => { clearTimeout(resizeTimer); resizeTimer = setTimeout(render, 150); });
 
 const prefs = loadPrefs();
 $("noeditor").checked = !!prefs.noEditor;
-if (prefs.expected != null) $("expected").value = prefs.expected;
 $("key").value = getKey();
 if (getKey()) load(); else setStatus("API 키를 입력하고 불러오세요.");
 </script>

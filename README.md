@@ -100,8 +100,8 @@ dotnet run            # http://0.0.0.0:5000 에서 대기, 데이터는 server/d
 | `POST /api/logs` | 필요 | 업로드. 수신함에 저장 후 202 `{"queued":true}`. 처리는 백그라운드에서 몰아서 한다 |
 | `GET /health` | 불필요 | `ok` |
 | `GET /dashboard` | 불필요 | 열람 대시보드(`/` 리디렉션) |
-| `GET /analytics` | 불필요 | 버전별 플레이 분석 페이지 |
-| `GET /api/analytics?month=` | 필요 | 게임 이벤트 로그의 버전별 집계(`month` 생략 시 전체 기간, `excludeEditor=true`) |
+| `GET /analytics` | 불필요 | 버전별 누적 통계 페이지 |
+| `GET /api/analytics?month=` | 필요 | 같은 앱 버전의 모든 세션 로그를 합산한 누적 통계(`month` 생략 시 전체 기간, `excludeEditor=true`) |
 | `GET /api/months` | 필요 | 월 목록 + 월별 집계 |
 | `GET /api/sessions?month=` | 필요 | 세션 목록(`q`, `onlyIssues`, `sort`) |
 | `GET /api/sessions/{id}` | 필요 | 세션 상세(`levels`, `category`, `scene`, `q`, `offset`, `limit`) |
