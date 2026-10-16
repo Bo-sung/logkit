@@ -127,7 +127,7 @@ public sealed class GameAnalytics
         {
             Month = month ?? string.Empty,
             ExcludeEditor = excludeEditor,
-            Stages = RaidStages.Select(p => new InsightStage { Scene = p.Scene, Name = p.Name }).ToList(),
+            Stages = RaidStages.Select(p => new InsightStage { Scene = p.Scene, Name = p.Name, VaultPenetration = p.Vault }).ToList(),
         };
         foreach (string version in versions)
         {
@@ -150,14 +150,17 @@ public sealed class GameAnalytics
         return response;
     }
 
-    /// <summary>습격 스테이지 표. 게임 Assets/Resources/RaidMapData.json의 regions 순서(입장 비용 오름차순)와 표시 이름이다.</summary>
-    private static readonly (string Scene, string Name)[] RaidStages =
+    /// <summary>
+    /// 습격 스테이지 표. 게임 Assets/Resources/RaidMapData.json의 regions 순서(입장 비용 오름차순)와 표시 이름이다.
+    /// Vault는 게임 담당이 알려 준 현재 씬의 금고 관통 내성(은행 금고 벽 3, 나머지 1)이며 기획의 대표 값은 아직 정해지지 않았다.
+    /// </summary>
+    private static readonly (string Scene, string Name, double Vault)[] RaidStages =
     {
-        ("Tutorial_WoodenHouse", "튜토리얼 목조주택"),
-        ("NightRaid_WoodenHouse", "목조주택"),
-        ("NightRaid_BankGrand", "은행"),
-        ("NightRaid_Millitary_base", "군사기지"),
-        ("NightRaid_JungleCampus", "정글 캠퍼스"),
+        ("Tutorial_WoodenHouse", "튜토리얼 목조주택", 1),
+        ("NightRaid_WoodenHouse", "목조주택", 1),
+        ("NightRaid_BankGrand", "은행", 3),
+        ("NightRaid_Millitary_base", "군사기지", 1),
+        ("NightRaid_JungleCampus", "정글 캠퍼스", 1),
     };
 
     /// <summary>범위 안 세션을 요약(digest)과 함께 앱 버전별로 묶는다. CSV가 없는 세션은 뺀다.</summary>

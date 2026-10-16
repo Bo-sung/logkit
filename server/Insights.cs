@@ -485,6 +485,9 @@ public sealed class InsightStage
 {
     public string Scene { get; set; } = string.Empty;
     public string Name { get; set; } = string.Empty;
+
+    /// <summary>현재 씬의 금고 관통 내성(임시 값, 기획 대표 값 미정).</summary>
+    public double VaultPenetration { get; set; }
 }
 
 /// <summary>버전 하나의 기록. 각 기록의 S는 이 버전 안의 세션 번호(0부터)이며 플레이어 단위로 쓴다.</summary>

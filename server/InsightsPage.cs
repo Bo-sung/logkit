@@ -74,7 +74,7 @@ public static class InsightsPage
     <div class="legend" style="margin-top:8px"><span><i style="background:#c98500"></i>낮</span><span><i style="background:#3987e5"></i>밤</span></div>
     <div id="c-phase" class="chart"></div>
     <p class="sub" style="margin:6px 0 0">이탈 = 세션이 그 구간에서 끝남(게임을 끄거나 크래시). 플레이어 ID가 없어 나중에 이어하기한 경우도 이탈로 셉니다.
-      클리어 이벤트가 없어 마지막 일차 종료도 이탈로 보입니다. 이탈 구간의 시간은 중간에 끊긴 값이라 기본으로 위 분포에서 뺍니다.</p>
+      게임에 클리어가 없고 1~7일차가 고정 일차, 8일차부터 무한 모드입니다(무한 표시). 이탈 구간의 시간은 중간에 끊긴 값이라 기본으로 위 분포에서 뺍니다.</p>
   </section>
 
   <div class="section">가설 통계</div>
@@ -83,7 +83,7 @@ public static class InsightsPage
     <div class="q">스테이지 선택 화면의 금고 내성 표기가 준비에 도움이 되는가?</div>
     <h3>스테이지별 습격 총 관통 모듈 수</h3>
     <p class="sub">습격 1회 = 1 · 습격 총은 습격 시작 코드, 없으면 그 습격에서 가장 많이 쏜 구성(세션에서 코드를 본 것) ·
-      금고 관통 내성 값이 스테이지 표·로그에 없어 x축은 스테이지(입장 비용 순)입니다. 관통 수치 대신 관통 모듈 개수를 씁니다.</p>
+      x축은 스테이지(입장 비용 순)와 현재 씬의 금고 관통 내성(은행 3, 나머지 1 — 기획 대표 값 미정)입니다. 관통 수치 대신 관통 모듈 개수를 씁니다.</p>
     <div id="c-vault" class="chart"></div>
   </section>
 
@@ -230,9 +230,13 @@ const NEUTRAL = "#484f58";
 const RULE_DEFAULT = { pen: 8, exp: 11, spread: 1, rate: 1, heat: 2, grav: 1 };
 state.rule = Object.assign({}, RULE_DEFAULT, loadPrefs().rule || {});
 
-const dayLabel = (d) => d + "일차";
+const dayLabel = (d) => d + "일차" + (d >= 8 ? "·무한" : "");
 const part = (parts, name) => (parts && parts[name]) || 0;
 const stageName = (scene) => (state.data.stages.find((s) => s.scene === scene) || {}).name || scene;
+const stageVaultLabel = (scene) => {
+  const st = state.data.stages.find((s) => s.scene === scene);
+  return st ? st.name + " (내성 " + st.vaultPenetration + ")" : scene;
+};
 
 /** 선택한 버전들에 나오는 일차 목록(오름차순). */
 function daysOf(vs, pick) {
@@ -483,7 +487,7 @@ function renderVault(vs) {
   const order = state.data.stages.map((s) => s.scene).filter((s) => seen.has(s));
   [...seen].filter((s) => !order.includes(s)).sort().forEach((s) => order.push(s));
   boxV($("c-vault"), vs, order, (v, stage) => v.raids.filter((r) => r.parts && r.stage === stage).map((r) => part(r.parts, "관통")),
-    (x) => num(x, 1) + "개", stageName);
+    (x) => num(x, 1) + "개", stageVaultLabel);
 }
 
 function renderNpc(vs) {
