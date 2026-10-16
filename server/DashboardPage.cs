@@ -118,7 +118,7 @@ nav { display: flex; align-items: center; gap: 8px; }
     </div>
     <div class="tablewrap">
       <table>
-        <thead><tr><th>시작(로컬)</th><th>플랫폼</th><th>버전</th><th>지속</th><th>로그</th><th>경고</th><th>오류</th><th>예외</th><th>종료</th><th>세션 ID</th></tr></thead>
+        <thead><tr><th>시작(로컬)</th><th>종료(로컬)</th><th>플랫폼</th><th>버전</th><th>지속</th><th>로그</th><th>경고</th><th>오류</th><th>예외</th><th>상태</th><th>세션 ID</th></tr></thead>
         <tbody id="sbody"></tbody>
       </table>
       <div id="sempty" class="empty" hidden>해당 월에 세션이 없습니다.</div>
@@ -192,6 +192,15 @@ function toLocal(ts) {
   const ms = m[7] ? Number(m[7].padEnd(3, "0").slice(0, 3)) : 0;
   const d = new Date(Date.UTC(+m[1], +m[2] - 1, +m[3], +m[4], +m[5], +m[6], ms));
   return isNaN(d) ? String(ts) : d.toLocaleString("sv-SE");
+}
+// 종료 시각 = 시작 + 지속 시간. short가 true면 시작과 같은 날일 때 시각만 보인다.
+function endLocal(startTs, sec, short) {
+  const start = toLocal(startTs);
+  const m = String(startTs || "").match(/^(\d{4})-(\d{2})-(\d{2})[T ](\d{2}):(\d{2}):(\d{2})/);
+  if (!m) return "";
+  const t = Date.UTC(+m[1], +m[2] - 1, +m[3], +m[4], +m[5], +m[6]) + Math.round((Number(sec) || 0) * 1000);
+  const end = new Date(t).toLocaleString("sv-SE");
+  return short && end.slice(0, 10) === start.slice(0, 10) ? end.slice(11) : end;
 }
 function fmtDuration(sec) {
   sec = Number(sec) || 0;
@@ -273,6 +282,7 @@ async function loadSessions() {
     tr.className = "click";
     tr.innerHTML =
       "<td>" + esc(toLocal(s.dateUtc)) + "</td>" +
+      "<td>" + esc(endLocal(s.dateUtc, s.durationSec, true)) + "</td>" +
       "<td>" + esc(s.platform) + (s.isEditor ? ' <span class="badge ed">에디터</span>' : "") + "</td>" +
       "<td>" + esc(s.appVersion) + "</td>" +
       "<td>" + esc(fmtDuration(s.durationSec)) + "</td>" +
@@ -320,7 +330,7 @@ async function loadDetail() {
   if (state.session !== id) return;
   state.matched = data.matched;
   $("dmeta").innerHTML =
-    "시작 <b>" + esc(toLocal(data.dateUtc)) + "</b> · 지속 <b>" + esc(fmtDuration(data.durationSec)) + "</b> · " +
+    "시작 <b>" + esc(toLocal(data.dateUtc)) + "</b> · 종료 <b>" + esc(endLocal(data.dateUtc, data.durationSec, false)) + "</b> · 지속 <b>" + esc(fmtDuration(data.durationSec)) + "</b> · " +
     (data.endedCleanly ? '<span class="badge ok">정상 종료</span>' : '<span class="badge crash">비정상 종료</span>') +
     (data.isEditor ? ' <span class="badge ed">에디터</span>' : "") +
     " · 플랫폼 <b>" + esc(data.platform) + "</b> · 버전 <b>" + esc(data.appVersion) + "</b>" +
