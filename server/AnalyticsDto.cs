@@ -46,6 +46,11 @@ public sealed class VersionAnalytics
     /// <summary>판매별 tagCount. 분포 차트용.</summary>
     public List<int> TagCounts { get; set; } = new();
 
+    // 주문 — Shop / order_completed (success는 고객 사망이 아닌 성공 완료)
+    public int OrdersCompleted { get; set; }
+    public int OrdersSucceeded { get; set; }
+    public int CustomerDeaths { get; set; }
+
     // 작업대 — 같은 씬의 시간순 진입→퇴장 쌍
     public int WorkbenchVisits { get; set; }
     public List<double> WorkbenchSeconds { get; set; } = new();
@@ -118,4 +123,94 @@ public sealed class Heatmap
     /// <summary>한 변의 칸 수. Cells는 행(z) 우선 Grid×Grid 배열이다.</summary>
     public int Grid { get; set; }
     public int[] Cells { get; set; } = Array.Empty<int>();
+}
+
+/// <summary>GET /api/analytics/weapons 응답 본문. 작업대 퇴장·시험 사격 입력의 총기 코드를 앱 버전별로 집계한다.</summary>
+public sealed class WeaponAnalyticsResponse
+{
+    public string Month { get; set; } = string.Empty;
+    public bool ExcludeEditor { get; set; }
+    public List<WeaponVersionStats> Versions { get; set; } = new();
+}
+
+/// <summary>
+/// 버전 하나의 총기 집계. 빌드 = 작업대 퇴장 때의 총기 구성이며, 같은 주문에서 구성을 바꾸지 않고 다시 나온 퇴장은 빌드로 세지 않는다.
+/// 파츠별·조합별 통계는 Configs(서로 다른 구성별 합계)에서 화면이 계산한다.
+/// </summary>
+public sealed class WeaponVersionStats
+{
+    public string Version { get; set; } = string.Empty;
+    public int Sessions { get; set; }
+    /// <summary>빌드가 1개 이상인 세션 수.</summary>
+    public int SessionsWithBuilds { get; set; }
+    /// <summary>workbench_exited 전체 수.</summary>
+    public int WorkbenchExits { get; set; }
+    public int Builds { get; set; }
+    /// <summary>같은 주문에서 직전 퇴장과 구성이 같은 퇴장 수(빌드에서 제외).</summary>
+    public int RepeatExits { get; set; }
+    /// <summary>게임이 코드를 만들지 못한 퇴장(weaponCodeStatus가 ok가 아니거나 코드 없음).</summary>
+    public int ExportFailed { get; set; }
+    /// <summary>코드가 있으나 서버가 해석하지 못한 퇴장(손상·형식 변경).</summary>
+    public int DecodeFailed { get; set; }
+    public int CustomNamedBuilds { get; set; }
+    /// <summary>색을 지정한 블록이 하나라도 있는 빌드 수.</summary>
+    public int ColoredBuilds { get; set; }
+    /// <summary>판매 이벤트 전체 수(옛 이름 총 판매 포함).</summary>
+    public int Sales { get; set; }
+    /// <summary>구성을 아는 판매 수 = SalesWithCode + SalesInferred.</summary>
+    public int SalesLinked { get; set; }
+    /// <summary>weapon_sold에 실제 판매 총 코드가 있는 판매 수.</summary>
+    public int SalesWithCode { get; set; }
+    /// <summary>코드가 없어(이전 빌드) 같은 orderId의 마지막 빌드로 추정한 판매 수. 작업대 밖 교체가 있으면 틀릴 수 있다.</summary>
+    public int SalesInferred { get; set; }
+    /// <summary>attack_input 전체 수(공방 주간의 발사 입력 — 실제 발사 성공이 아님).</summary>
+    public int AttackInputs { get; set; }
+    public int AttackInputsDecoded { get; set; }
+
+    /// <summary>Shop / weapon_fired 수(공방 주간의 실제 발사 성공). WithoutId는 구성 ID가 없는 발사.</summary>
+    public int ShopShots { get; set; }
+    public int ShopShotsWithoutId { get; set; }
+
+    /// <summary>습격 구간 수와 그중 습격 시작에 휴대 총 코드가 있는 습격 수.</summary>
+    public int Raids { get; set; }
+    public int RaidsWithLoadout { get; set; }
+    /// <summary>습격 중 처음 쓰는 구성으로 바꾼 기록(raid_weapon_config) 수.</summary>
+    public int RaidWeaponChanges { get; set; }
+    /// <summary>NightRaid / weapon_fired 수. WithoutId는 구성 ID가 없는 발사.</summary>
+    public int RaidShots { get; set; }
+    public int RaidShotsWithoutId { get; set; }
+    /// <summary>스테이지별 습격 발사 위치 밀도. 범위는 전 버전 공통.</summary>
+    public List<Heatmap> ShotHeatmaps { get; set; } = new();
+
+    public List<WeaponConfig> Configs { get; set; } = new();
+}
+
+/// <summary>서로 다른 총기 구성 하나의 버전 내 합계. Key는 게임의 구성 ID(weaponAssemblyId, 이름·색 제외)다.</summary>
+public sealed class WeaponConfig
+{
+    public string Key { get; set; } = string.Empty;
+    /// <summary>코드를 본 적 있어 파츠를 아는 구성이면 true. 구성 ID만 있는 발사(코드를 못 본 총)는 false이고 Parts가 비어 있다.</summary>
+    public bool Known { get; set; }
+    /// <summary>튜토리얼(Day0)이 만들어 주는 기본 블럭 5개 구성이면 true.</summary>
+    public bool Tutorial { get; set; }
+    /// <summary>파츠 표시 이름 → 블록 수. 코어는 포함하지 않는다.</summary>
+    public Dictionary<string, int> Parts { get; set; } = new();
+    public int Blocks { get; set; }
+    public int Builds { get; set; }
+    /// <summary>이 구성을 만든 세션 수.</summary>
+    public int Sessions { get; set; }
+    public int Sold { get; set; }
+    /// <summary>price가 기록된 판매의 판매액 합계와 건수.</summary>
+    public double PriceSum { get; set; }
+    public int Priced { get; set; }
+    public int Satisfied { get; set; }
+    public int SatisfiedKnown { get; set; }
+    public int AttackInputs { get; set; }
+    /// <summary>공방 주간 실제 발사 수.</summary>
+    public int ShopShots { get; set; }
+    /// <summary>이 구성을 들고 시작한 습격 수.</summary>
+    public int RaidLoadouts { get; set; }
+    /// <summary>습격 중 실제 발사 수와 스테이지별 내역.</summary>
+    public int RaidShots { get; set; }
+    public Dictionary<string, int> StageShots { get; set; } = new();
 }

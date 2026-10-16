@@ -60,6 +60,8 @@ dotnet run        # http://0.0.0.0:5000 에서 대기
 | `GET /dashboard` | 불필요 | 200 `text/html` | 브라우저 열람 대시보드. `/`는 `/dashboard`로 리디렉션 |
 | `GET /analytics` | 불필요 | 200 `text/html` | 버전별 누적 통계 페이지 |
 | `GET /api/analytics` | 필요 | 200 JSON | 같은 앱 버전의 모든 세션 로그를 합산한 누적 통계. `month`(yyyy-MM, 생략 시 전체 기간), `excludeEditor=true`(에디터 세션 제외). 형식이 틀리면 400 |
+| `GET /weapons` | 불필요 | 200 `text/html` | 버전별 총기 모딩 통계 페이지 |
+| `GET /api/analytics/weapons` | 필요 | 200 JSON | 작업대 퇴장·시험 사격 입력의 총기 코드를 해석해 버전별 구성(Configs) 합계로 돌려준다. 파라미터는 `/api/analytics`와 같다 |
 
 인증은 `X-Api-Key` 헤더 하나다. 브라우저 다운로드 링크처럼 헤더를 붙일 수 없는 요청은 `?key=API키` 쿼리로 대신할 수 있다. `/health`와 `/dashboard` 페이지 자체는 예외고, 대시보드가 부르는 `/api` 호출은 전부 검사한다.
 
@@ -96,31 +98,53 @@ curl -H "X-Api-Key: dev-log-key" http://localhost:5000/api/summary/2026-10.csv
 GM툴이 세션 로그를 하나씩 보는 화면이라면, `http://localhost:5000/analytics`(GM툴 상단 링크)는 **같은 앱 버전(`appVersion`, 예: 0.1.2)의 모든 세션 로그를 합쳐** 버전끼리 비교한다. API 키는 GM툴과 공유한다.
 
 - **버전 선택**: 최대 8개. 색은 버전에 고정되어 선택을 바꿔도 남은 버전의 색이 바뀌지 않는다. 월 단위·전체 기간, 에디터 세션 제외를 고를 수 있다.
-- **누적 지표 표**: 세션 수·기간·플레이 시간·정상 종료 비율 / 판매 건수·판매액·판매 조건 만족 비율·태그 수·작업대 체류 / 습격 수·생존 비율·소요 시간·습격당 블록 파괴와 적 생성·발견·처치·종료 체력·상자 크레딧. 세션 수가 버전마다 다르므로 세션당·습격당 값을 함께 보여 준다.
+- **누적 지표 표**: 세션 수·기간·플레이 시간·정상 종료 비율 / 판매 건수·판매액·판매 조건 만족 비율·태그 수·주문 성공 비율·작업대 체류 / 습격 수·생존 비율·소요 시간·습격당 블록 파괴와 적 생성·발견·처치·종료 체력·상자 크레딧. 세션 수가 버전마다 다르므로 세션당·습격당 값을 함께 보여 준다.
 - **상점**: 판매액 분포, 판매 태그 수 분포, 작업대 체류 시간 분포(버전 내 비율).
 - **습격**: 스테이지별 생존 비율, 게임 시간별 평균 상태(체력·남은 모듈 상자·남은 재료 상자·탱크·헬기), 스테이지별 습격 통계 표, 종료 보상 모듈 ID 비율, 스테이지별 위치 히트맵(X·Z 동일 축척, 버전별 나란히).
-- **미수집 항목**: 총기 코드·휴대 모듈·사격 테스트·주문 성공률은 로그에 없어 집계하지 않고 화면에 미수집으로 표시한다.
+- **미수집 항목**: 습격 중 휴대 총기·실제 발사 수·위치별 사격은 로그에 없어 집계하지 않고 화면에 미수집으로 표시한다.
 
 세션별 중간 결과는 세션 CSV 수정 시각 기준으로 메모리에 캐시한다.
 
 ### 집계 기준 — 게임이 남기는 이벤트
 
-category와 message(한글 이벤트 이름)로 식별하고 data_json 필드를 읽는다. 규칙은 `armory-dashboard/README.md`와 같다.
+category와 message로 식별하고 data_json 필드를 읽는다. 규칙은 `armory-dashboard/README.md`와 같다. 상점 이벤트는 초기 빌드의 한글 이름과 이후 `ShopLogCollector`의 eventType 이름을 모두 받는다.
 
 | category | message | data_json | 집계 |
 | --- | --- | --- | --- |
-| Shop | 총 판매 | `price`, `satisfied`, `tagCount` | 판매·판매액. Unity 카테고리의 `[Customer] 총 판매 …` 출력은 중복이라 제외 |
-| Workshop | 작업대 진입 / 작업대 퇴장 | — | 같은 씬의 시간순 진입→퇴장 쌍만 체류 시간. 주문 ID가 없어 주문별로 연결하지 않음 |
+| Shop | weapon_sold (초기: 총 판매) | `price`, `satisfied`, `tagCount`, `orderId` | 판매·판매액. Unity 카테고리의 `[Customer] 총 판매 …` 출력은 중복이라 제외 |
+| Shop | workbench_entered / workbench_exited (초기: Workshop / 작업대 진입·퇴장) | `orderId`, 퇴장은 `weaponCode`, `weaponCodeStatus` | 같은 씬의 시간순 진입→퇴장 쌍만 체류 시간. 퇴장 코드는 총기 통계 |
+| Shop | attack_input / weapon_fired | `weaponCode` / `weaponAssemblyId`, `position` | 총기 통계(시험 사격 입력 / 실제 발사) |
+| Shop | order_completed | `success`, `customerDead` | 주문 성공 비율·고객 사망 |
 | NightRaid | 습격 시작 | `scene` | 습격 구간 시작. 씬 전환 전(Main)에 기록되므로 습격 씬은 `data_json.scene` |
 | NightRaid | 플레이어 상태 | `time`, `position{x,y,z}`, `cameraRotation`, `health`, `remainingModuleCrates`, `remainingMaterialCrates`, `tanks`, `helicopters` | 게임 시간 타임라인·위치 히트맵 |
 | NightRaid | 블록 파괴 | `stageId`, `time`, `blockId` | 습격당 파괴 수 |
 | NightRaid | 적 생성 / 적 발견 / 적 처치 | `time`, `enemyId` | 습격당 수. `enemyId`는 개체 ID라 종류로 묶지 않음 |
-| NightRaid | 습격 사망 / 탈출 성공 / 습격 성공 | `scene`, `survived`, `time`, `duration`, `enemyKills`, `health`, `moduleCrateRewards[]`, `moduleCrateCredits`, `materialCrateCredits` | 습격 구간 종료. 생존 비율·소요 시간·종료 값 평균 |
+| NightRaid | 습격 사망 / 습격 탈출 성공 / 습격 성공 | `scene`, `survived`, `time`, `duration`, `enemyKills`, `health`, `moduleCrateRewards[]`, `moduleCrateCredits`, `materialCrateCredits` | 습격 구간 종료. 생존 비율·소요 시간·종료 값 평균 |
 
 - `timestamp_utc`(실제 시각)와 `data_json.time`(게임 시간)은 섞지 않는다. 습격 차트는 게임 시간 기준이다.
 - 기록되지 않은 값은 0으로 바꾸지 않고 `null`(화면에는 –)로 둔다. 종료 이벤트 없이 끝난 습격은 종료 기록 수에서 빠진다.
 - 모듈 상자·재료 상자는 따로 표시하고 다른 이름(금고 등)으로 바꾸지 않는다. 종료 보상은 기록값이며 사망 후 실제 지급 여부는 알 수 없다.
 - 플레이어 상태를 물리 프레임(0.02초)마다 남기면 10분 습격 한 판에 약 3만 행이 된다. 0.2~0.5초 간격으로 솎아 기록하길 권장한다.
+
+## 총기 모딩 통계 (/weapons)
+
+`http://localhost:5000/weapons`(버전 통계 상단 링크)는 로그에 실린 무기 공유 코드(`WSC:…`)를 서버에서 해석해 버전별로 비교한다. 해석은 `WeaponCode.cs`가 하며 게임의 `WeaponShareCode.Decode`와 같은 형식이다(HMAC 무결성 검사 포함, 무기 이름은 복호화하지 않음).
+
+| category | message | 총기 필드 | 쓰임 |
+| --- | --- | --- | --- |
+| Shop | workbench_exited | `weaponCode` | 빌드(작업대에서 나올 때의 총) |
+| Shop | weapon_sold | `weaponCode` | 실제 판매된 총. 코드가 없는 이전 빌드 로그는 같은 `orderId`의 마지막 빌드로 추정 |
+| Shop | attack_input | `weaponCode` | 시험 사격 입력(누를 때 1회, 발사 성공 아님) |
+| Shop | weapon_fired | `weaponAssemblyId`, `position` | 공방 실제 발사 |
+| NightRaid | 습격 시작 | `weaponCode`, `weaponAssemblyId` | 습격에 들고 간 총 |
+| NightRaid | raid_weapon_config | `weaponCode`, `weaponAssemblyId` | 습격 중 처음 쓰는 구성 |
+| NightRaid | weapon_fired | `weaponAssemblyId`, `position` | 습격 실제 발사(스테이지별 파츠 사용·발사 위치 히트맵) |
+
+- **구성 ID**: 서버는 코드에서 게임 `GetAssemblyKey`(= `TestAssemblyKey`, 로그의 `weaponAssemblyId`)와 같은 값을 계산해 구성 키로 쓴다. 그래서 코드 없이 구성 ID만 있는 발사도 같은 세션에서 코드를 본 구성이면 파츠로 풀린다. 못 본 구성은 "구성 미확인"으로 따로 센다.
+- **빌드**: 작업대 퇴장 1회 = 빌드 1개. 같은 `orderId`에서 직전 퇴장과 구성이 같으면 세지 않는다.
+- **튜토리얼 기본 구성**: 코어 좌·우·위·아래·뒤에 기본 블럭 5개를 붙인 Day0 튜토리얼 총. 화면에서 기본으로 제외한다.
+- **집계 대상**: 빌드 / 판매된 총 / 습격 휴대 / 습격 발사 / 공방 발사 / 시험 사격 입력 중 하나를 골라, 그 수를 가중치로 파츠 사용량(채택률·블록 점유율·넣었을 때 평균 개수)·파츠 조합 빈도·동시 사용 행렬·총 크기 분포·많이 쓴 구성을 계산한다. API는 구성별 합계(Configs)만 보낸다.
+- **모듈 이름**: 게임 저장소 `Assets/Data/Modules/*.asset`의 `codeId`(에셋 GUID)·`displayName`을 `WeaponCode.cs`에 표로 둔다. 모듈이 추가되면 표에 더한다. 모르는 GUID는 `모듈 + 앞 8자리`로 표시된다.
 
 ## 대시보드가 없어도 되는 이유
 

@@ -5,9 +5,11 @@ using System.Text.Json;
 namespace LogServer;
 
 /// <summary>
-/// 게임이 실제로 남기는 이벤트 이름. category와 message(한글 이벤트 이름)로 식별하고 data_json 필드를 읽는다.
+/// 게임이 실제로 남기는 이벤트 이름. category와 message로 식별하고 data_json 필드를 읽는다.
 /// 집계 규칙은 ARMORY 대시보드(armory-dashboard/README.md)와 같다.
 /// Unity 콘솔 판매 출력([Customer] 총 판매 …)은 Shop 판매와 중복이므로 Unity 카테고리 전체를 무시한다.
+/// 상점 이벤트는 초기 빌드의 한글 이름(Shop / 총 판매, Workshop / 작업대 진입·퇴장)과
+/// 이후 ShopLogCollector의 eventType 이름(Shop / weapon_sold 등)을 모두 받는다.
 /// </summary>
 internal static class GameEvents
 {
@@ -15,11 +17,20 @@ internal static class GameEvents
     public const string WorkshopCategory = "Workshop";
     public const string RaidCategory = "NightRaid";
 
-    public const string Sale = "총 판매";                    // price, satisfied, tagCount
-    public const string WorkbenchEnter = "작업대 진입";
-    public const string WorkbenchExit = "작업대 퇴장";
+    public const string LegacySale = "총 판매";              // price, satisfied, tagCount
+    public const string LegacyWorkbenchEnter = "작업대 진입";
+    public const string LegacyWorkbenchExit = "작업대 퇴장";
 
-    public const string RaidStart = "습격 시작";              // scene
+    // ShopLogCollector — 공통 필드 eventType, eventId, orderId, day
+    public const string Sale = "weapon_sold";                 // price, satisfied, tagCount, weaponCode (코드는 이후 빌드부터)
+    public const string WorkbenchEnter = "workbench_entered";
+    public const string WorkbenchExit = "workbench_exited";   // weaponCode, weaponCodeStatus
+    public const string AttackInput = "attack_input";         // weaponCode, weaponCodeStatus (발사 입력, 발사 성공 아님)
+    public const string OrderCompleted = "order_completed";   // success, customerDead
+    public const string WeaponFired = "weapon_fired";         // time, position, weaponAssemblyId (Shop: 공방 주간, NightRaid: 습격 중)
+    public const string RaidWeaponConfig = "raid_weapon_config"; // time, weaponCode, weaponAssemblyId — 습격 중 처음 쓰는 구성
+
+    public const string RaidStart = "습격 시작";              // scene, weaponCode, weaponAssemblyId (휴대 총은 이후 빌드부터)
     public const string PlayerState = "플레이어 상태";        // time, position{x,y,z}, cameraRotation, health, remainingModuleCrates, remainingMaterialCrates, tanks, helicopters
     public const string BlockDestroyed = "블록 파괴";         // stageId, time, blockId
     public const string EnemySpawn = "적 생성";               // time, enemyId
@@ -27,7 +38,7 @@ internal static class GameEvents
     public const string EnemyKilled = "적 처치";              // time, enemyId
 
     // 종료 이벤트: scene, survived, time, duration, moduleCrateRewards[], moduleCrateCredits, materialCrateCredits, enemyKills, health
-    public static readonly string[] RaidEnds = { "습격 사망", "탈출 성공", "습격 성공" };
+    public static readonly string[] RaidEnds = { "습격 사망", "습격 탈출 성공", "탈출 성공", "습격 성공" };
 }
 
 /// <summary>
@@ -62,6 +73,44 @@ public sealed class GameAnalytics
     /// </summary>
     public AnalyticsResponse Build(string? month, bool excludeEditor)
     {
+        Dictionary<string, List<(SessionRow Row, SessionDigest Digest)>> byVersion = GroupByVersion(month, excludeEditor);
+        Dictionary<string, HeatmapBounds> bounds = ComputeHeatmapBounds(
+            byVersion.Values.SelectMany(list => list.Select(item => item.Digest)), raid => raid.Points);
+        List<string> versions = byVersion.Keys.ToList();
+        versions.Sort(CompareVersions);
+
+        return new AnalyticsResponse
+        {
+            Month = month ?? string.Empty,
+            ExcludeEditor = excludeEditor,
+            TimelineBinSeconds = TimelineBinSeconds,
+            Versions = versions.Select(v => Aggregate(v, byVersion[v], bounds)).ToList(),
+        };
+    }
+
+    /// <summary>
+    /// 범위 안 세션의 총기 코드 통계를 버전별로 누적한다.
+    /// month(yyyy-MM, 비면 전체 월)와 excludeEditor를 사용하며, 버전 오름차순 총기 집계 응답을 반환한다.
+    /// </summary>
+    public WeaponAnalyticsResponse BuildWeapons(string? month, bool excludeEditor)
+    {
+        Dictionary<string, List<(SessionRow Row, SessionDigest Digest)>> byVersion = GroupByVersion(month, excludeEditor);
+        Dictionary<string, HeatmapBounds> bounds = ComputeHeatmapBounds(
+            byVersion.Values.SelectMany(list => list.Select(item => item.Digest)), raid => raid.ShotPoints);
+        List<string> versions = byVersion.Keys.ToList();
+        versions.Sort(CompareVersions);
+
+        return new WeaponAnalyticsResponse
+        {
+            Month = month ?? string.Empty,
+            ExcludeEditor = excludeEditor,
+            Versions = versions.Select(v => AggregateWeapons(v, byVersion[v], bounds)).ToList(),
+        };
+    }
+
+    /// <summary>범위 안 세션을 요약(digest)과 함께 앱 버전별로 묶는다. CSV가 없는 세션은 뺀다.</summary>
+    private Dictionary<string, List<(SessionRow Row, SessionDigest Digest)>> GroupByVersion(string? month, bool excludeEditor)
+    {
         List<string> months = string.IsNullOrEmpty(month)
             ? _summary.ListMonths().Select(info => info.Month).ToList()
             : new List<string> { month };
@@ -93,17 +142,7 @@ public sealed class GameAnalytics
             }
         }
 
-        Dictionary<string, HeatmapBounds> bounds = ComputeHeatmapBounds(byVersion.Values.SelectMany(list => list.Select(item => item.Digest)));
-        List<string> versions = byVersion.Keys.ToList();
-        versions.Sort(CompareVersions);
-
-        return new AnalyticsResponse
-        {
-            Month = month ?? string.Empty,
-            ExcludeEditor = excludeEditor,
-            TimelineBinSeconds = TimelineBinSeconds,
-            Versions = versions.Select(v => Aggregate(v, byVersion[v], bounds)).ToList(),
-        };
+        return byVersion;
     }
 
     /// <summary>
@@ -155,62 +194,81 @@ public sealed class GameAnalytics
         ordered.Sort((a, b) => a.At != b.At ? a.At.CompareTo(b.At) : a.Index.CompareTo(b.Index));
 
         SessionDigest d = new();
+        WeaponTracker weapons = new(d.Weapons);
         (DateTime At, string Scene)? openWorkbench = null;
         RaidDigest? raid = null;
+
+        void EnterWorkbench(DateTime at, string scene)
+        {
+            if (openWorkbench != null)
+            {
+                d.UnmatchedWorkbench++;
+            }
+
+            openWorkbench = (at, scene);
+        }
+
+        void ExitWorkbench(DateTime at, string scene)
+        {
+            if (openWorkbench is { } open && open.Scene == scene && at >= open.At)
+            {
+                d.WorkbenchSeconds.Add((at - open.At).TotalSeconds);
+                openWorkbench = null;
+            }
+            else
+            {
+                d.UnmatchedWorkbench++;
+            }
+        }
 
         foreach ((DateTime at, _, LogEntry entry) in ordered)
         {
             string name = entry.Message.Trim();
             if (Is(entry.Category, GameEvents.ShopCategory))
             {
-                if (name != GameEvents.Sale)
+                switch (name)
                 {
-                    continue;
-                }
+                    case GameEvents.Sale:
+                    case GameEvents.LegacySale:
+                        JsonElement sale = ParseData(entry.DataJson);
+                        AddSale(d, sale);
+                        weapons.Sale(sale);
+                        break;
 
-                JsonElement data = ParseData(entry.DataJson);
-                d.Sales++;
-                if (ReadDouble(data, "price") is double price)
-                {
-                    d.Prices.Add(price);
-                }
+                    case GameEvents.WorkbenchEnter:
+                        EnterWorkbench(at, entry.Scene);
+                        break;
 
-                if (TryGet(data, "satisfied", out JsonElement satisfied) && satisfied.ValueKind is JsonValueKind.True or JsonValueKind.False)
-                {
-                    d.SalesWithSatisfied++;
-                    if (satisfied.ValueKind == JsonValueKind.True)
-                    {
-                        d.SatisfiedSales++;
-                    }
-                }
+                    case GameEvents.WorkbenchExit:
+                        ExitWorkbench(at, entry.Scene);
+                        weapons.WorkbenchExit(ParseData(entry.DataJson));
+                        break;
 
-                if (ReadDouble(data, "tagCount") is double tags)
-                {
-                    d.TagCounts.Add((int)tags);
+                    case GameEvents.AttackInput:
+                        weapons.AttackInput(ParseData(entry.DataJson));
+                        break;
+
+                    case GameEvents.WeaponFired:
+                        weapons.ShopShot(ParseData(entry.DataJson));
+                        break;
+
+                    case GameEvents.OrderCompleted:
+                        JsonElement order = ParseData(entry.DataJson);
+                        d.OrdersCompleted++;
+                        d.OrdersSucceeded += TryGet(order, "success", out JsonElement success) && success.ValueKind == JsonValueKind.True ? 1 : 0;
+                        d.CustomerDeaths += TryGet(order, "customerDead", out JsonElement dead) && dead.ValueKind == JsonValueKind.True ? 1 : 0;
+                        break;
                 }
             }
             else if (Is(entry.Category, GameEvents.WorkshopCategory))
             {
-                if (name == GameEvents.WorkbenchEnter)
+                if (name == GameEvents.LegacyWorkbenchEnter)
                 {
-                    if (openWorkbench != null)
-                    {
-                        d.UnmatchedWorkbench++;
-                    }
-
-                    openWorkbench = (at, entry.Scene);
+                    EnterWorkbench(at, entry.Scene);
                 }
-                else if (name == GameEvents.WorkbenchExit)
+                else if (name == GameEvents.LegacyWorkbenchExit)
                 {
-                    if (openWorkbench is { } open && open.Scene == entry.Scene && at >= open.At)
-                    {
-                        d.WorkbenchSeconds.Add((at - open.At).TotalSeconds);
-                        openWorkbench = null;
-                    }
-                    else
-                    {
-                        d.UnmatchedWorkbench++;
-                    }
+                    ExitWorkbench(at, entry.Scene);
                 }
             }
             else if (Is(entry.Category, GameEvents.RaidCategory))
@@ -234,6 +292,7 @@ public sealed class GameAnalytics
                 }
 
                 ApplyRaidEvent(raid, name, data);
+                weapons.RaidEvent(raid, name, data);
                 if (GameEvents.RaidEnds.Contains(name) || TryGet(data, "survived", out JsonElement s) && s.ValueKind is JsonValueKind.True or JsonValueKind.False)
                 {
                     raid.Ended = true;
@@ -263,6 +322,27 @@ public sealed class GameAnalytics
         }
 
         return d;
+    }
+
+    /// <summary>판매 이벤트 하나의 price·satisfied·tagCount를 세션 요약에 더한다. 결측 필드는 해당 목록에서 뺀다.</summary>
+    private static void AddSale(SessionDigest d, JsonElement data)
+    {
+        d.Sales++;
+        if (ReadDouble(data, "price") is double price)
+        {
+            d.Prices.Add(price);
+        }
+
+        if (ReadBool(data, "satisfied") is bool satisfied)
+        {
+            d.SalesWithSatisfied++;
+            d.SatisfiedSales += satisfied ? 1 : 0;
+        }
+
+        if (ReadDouble(data, "tagCount") is double tags)
+        {
+            d.TagCounts.Add((int)tags);
+        }
     }
 
     /// <summary>습격 구간 안의 상태·블록·적 이벤트 하나를 구간 요약에 더한다.</summary>
@@ -318,13 +398,17 @@ public sealed class GameAnalytics
         }
     }
 
-    /// <summary>스테이지(습격 씬)별 위치 범위를 전 버전 공통으로 구한다. 버전 간 히트맵을 같은 좌표로 비교하기 위함이다.</summary>
-    private static Dictionary<string, HeatmapBounds> ComputeHeatmapBounds(IEnumerable<SessionDigest> digests)
+    /// <summary>
+    /// 스테이지(습격 씬)별 위치 범위를 전 버전 공통으로 구한다. 버전 간 히트맵을 같은 좌표로 비교하기 위함이다.
+    /// pointsOf는 습격 구간에서 x, z를 번갈아 담은 좌표 목록(플레이어 상태 위치 또는 발사 위치)을 고른다.
+    /// </summary>
+    private static Dictionary<string, HeatmapBounds> ComputeHeatmapBounds(IEnumerable<SessionDigest> digests, Func<RaidDigest, List<float>> pointsOf)
     {
         Dictionary<string, HeatmapBounds> bounds = new(StringComparer.Ordinal);
         foreach (RaidDigest raid in digests.SelectMany(d => d.Raids))
         {
-            if (raid.Points.Count == 0)
+            List<float> points = pointsOf(raid);
+            if (points.Count == 0)
             {
                 continue;
             }
@@ -335,9 +419,9 @@ public sealed class GameAnalytics
                 bounds[raid.Scene] = b;
             }
 
-            for (int i = 0; i + 1 < raid.Points.Count; i += 2)
+            for (int i = 0; i + 1 < points.Count; i += 2)
             {
-                b.Include(raid.Points[i], raid.Points[i + 1]);
+                b.Include(points[i], points[i + 1]);
             }
         }
 
@@ -383,6 +467,9 @@ public sealed class GameAnalytics
             tagCounts.AddRange(d.TagCounts);
             satisfied += d.SatisfiedSales;
             withSatisfied += d.SalesWithSatisfied;
+            v.OrdersCompleted += d.OrdersCompleted;
+            v.OrdersSucceeded += d.OrdersSucceeded;
+            v.CustomerDeaths += d.CustomerDeaths;
             workbench.AddRange(d.WorkbenchSeconds);
             v.UnmatchedWorkbench += d.UnmatchedWorkbench;
             if (d.Sales > 0)
@@ -489,6 +576,133 @@ public sealed class GameAnalytics
     }
 
     /// <summary>
+    /// 한 버전에 속한 세션 요약의 총기 기록을 합산한다. 구성은 Key(게임 구성 ID)로 합치고 빌드 수 내림차순으로 둔다.
+    /// 습격 발사는 습격 구간의 스테이지로 나눠 구성별 StageShots와 스테이지별 발사 위치 히트맵에 더한다.
+    /// </summary>
+    private static WeaponVersionStats AggregateWeapons(
+        string version,
+        List<(SessionRow Row, SessionDigest Digest)> sessions,
+        Dictionary<string, HeatmapBounds> bounds)
+    {
+        WeaponVersionStats v = new() { Version = version, Sessions = sessions.Count };
+        Dictionary<string, WeaponConfig> configs = new(StringComparer.Ordinal);
+        Dictionary<string, int[]> heat = new(StringComparer.Ordinal);
+
+        // 구성 ID만 본 세션(Known=false)이 먼저 와도, 코드를 본 세션이 나오면 파츠 정보를 채운다.
+        WeaponConfig Total(WeaponConfig c)
+        {
+            if (!configs.TryGetValue(c.Key, out WeaponConfig? total))
+            {
+                total = new WeaponConfig { Key = c.Key };
+                configs[c.Key] = total;
+            }
+
+            if (!total.Known && c.Known)
+            {
+                total.Known = true;
+                total.Tutorial = c.Tutorial;
+                total.Parts = c.Parts;
+                total.Blocks = c.Blocks;
+            }
+
+            return total;
+        }
+
+        foreach ((_, SessionDigest digest) in sessions)
+        {
+            WeaponDigest w = digest.Weapons;
+            v.WorkbenchExits += w.WorkbenchExits;
+            v.RepeatExits += w.RepeatExits;
+            v.ExportFailed += w.ExportFailed;
+            v.DecodeFailed += w.DecodeFailed;
+            v.CustomNamedBuilds += w.CustomNamedBuilds;
+            v.ColoredBuilds += w.ColoredBuilds;
+            v.Sales += digest.Sales;
+            v.SalesWithCode += w.SalesWithCode;
+            v.SalesInferred += w.SalesInferred;
+            v.AttackInputs += w.AttackInputs;
+            v.AttackInputsDecoded += w.AttackInputsDecoded;
+            v.ShopShots += w.ShopShots;
+            v.ShopShotsWithoutId += w.ShopShotsWithoutId;
+            int sessionBuilds = 0;
+            foreach (WeaponConfig c in w.Configs.Values)
+            {
+                WeaponConfig total = Total(c);
+                total.Builds += c.Builds;
+                total.Sessions += c.Builds > 0 ? 1 : 0;
+                total.Sold += c.Sold;
+                total.PriceSum += c.PriceSum;
+                total.Priced += c.Priced;
+                total.Satisfied += c.Satisfied;
+                total.SatisfiedKnown += c.SatisfiedKnown;
+                total.AttackInputs += c.AttackInputs;
+                total.ShopShots += c.ShopShots;
+                total.RaidLoadouts += c.RaidLoadouts;
+                sessionBuilds += c.Builds;
+            }
+
+            v.Builds += sessionBuilds;
+            v.SessionsWithBuilds += sessionBuilds > 0 ? 1 : 0;
+
+            foreach (RaidDigest raid in digest.Raids)
+            {
+                v.Raids++;
+                v.RaidsWithLoadout += raid.HasLoadout ? 1 : 0;
+                v.RaidWeaponChanges += raid.WeaponChanges;
+                v.RaidShotsWithoutId += raid.ShotsWithoutId;
+                v.RaidShots += raid.ShotsWithoutId;
+                foreach ((string key, int shots) in raid.Shots)
+                {
+                    // 습격 발사의 구성 ID는 WeaponTracker가 세션 요약에 등록해 둔다(코드를 못 봤으면 Known=false).
+                    WeaponConfig total = Total(w.Configs[key]);
+                    total.RaidShots += shots;
+                    total.StageShots.TryGetValue(raid.Scene, out int stageShots);
+                    total.StageShots[raid.Scene] = stageShots + shots;
+                    v.RaidShots += shots;
+                }
+
+                if (raid.ShotPoints.Count == 0)
+                {
+                    continue;
+                }
+
+                HeatmapBounds b = bounds[raid.Scene];
+                if (!heat.TryGetValue(raid.Scene, out int[]? cells))
+                {
+                    cells = new int[HEATMAP_GRID * HEATMAP_GRID];
+                    heat[raid.Scene] = cells;
+                }
+
+                for (int i = 0; i + 1 < raid.ShotPoints.Count; i += 2)
+                {
+                    cells[b.Row(raid.ShotPoints[i + 1], HEATMAP_GRID) * HEATMAP_GRID + b.Col(raid.ShotPoints[i], HEATMAP_GRID)]++;
+                }
+            }
+        }
+
+        v.SalesLinked = v.SalesWithCode + v.SalesInferred;
+        v.Configs = configs.Values
+            .OrderByDescending(c => c.Builds).ThenByDescending(c => c.RaidShots + c.ShopShots).ThenBy(c => c.Key, StringComparer.Ordinal)
+            .ToList();
+        foreach (KeyValuePair<string, int[]> pair in heat.OrderBy(p => p.Key, StringComparer.Ordinal))
+        {
+            HeatmapBounds b = bounds[pair.Key];
+            v.ShotHeatmaps.Add(new Heatmap
+            {
+                StageId = pair.Key,
+                MinX = b.MinX,
+                MaxX = b.MaxX,
+                MinZ = b.MinZ,
+                MaxZ = b.MaxZ,
+                Grid = HEATMAP_GRID,
+                Cells = pair.Value,
+            });
+        }
+
+        return v;
+    }
+
+    /// <summary>
     /// 버전 문자열을 점 구분 숫자 단위로 비교한다(1.10이 1.9 뒤). 숫자가 아닌 조각은 문자열로 비교한다.
     /// </summary>
     internal static int CompareVersions(string? a, string? b)
@@ -565,6 +779,17 @@ public sealed class GameAnalytics
             && double.IsFinite(number))
         {
             return number;
+        }
+
+        return null;
+    }
+
+    /// <summary>불리언 필드를 읽는다. 없거나 불리언이 아니면 null.</summary>
+    private static bool? ReadBool(JsonElement data, string name)
+    {
+        if (TryGet(data, name, out JsonElement value) && value.ValueKind is JsonValueKind.True or JsonValueKind.False)
+        {
+            return value.ValueKind == JsonValueKind.True;
         }
 
         return null;
@@ -717,9 +942,251 @@ internal sealed class SessionDigest
     public int SalesWithSatisfied;
     public readonly List<double> Prices = new();
     public readonly List<int> TagCounts = new();
+    public int OrdersCompleted;
+    public int OrdersSucceeded;
+    public int CustomerDeaths;
     public readonly List<double> WorkbenchSeconds = new();
     public int UnmatchedWorkbench;
     public readonly List<RaidDigest> Raids = new();
+    public readonly WeaponDigest Weapons = new();
+}
+
+/// <summary>한 세션의 총기 기록 요약. Configs는 구성 Key별 합계다(Sessions 필드는 버전 합산 때 채운다).</summary>
+internal sealed class WeaponDigest
+{
+    public int WorkbenchExits;
+    public int RepeatExits;
+    public int ExportFailed;
+    public int DecodeFailed;
+    public int CustomNamedBuilds;
+    public int ColoredBuilds;
+    public int SalesWithCode;
+    public int SalesInferred;
+    public int AttackInputs;
+    public int AttackInputsDecoded;
+    public int ShopShots;
+    public int ShopShotsWithoutId;
+    public readonly Dictionary<string, WeaponConfig> Configs = new(StringComparer.Ordinal);
+}
+
+/// <summary>
+/// 세션 하나를 시간순으로 훑으며 총기 이벤트를 WeaponDigest에 쌓는다. 구성은 게임 구성 ID(weaponAssemblyId)로 묶는다.
+/// 빌드는 작업대 퇴장 때의 구성이며, 같은 orderId의 직전 퇴장과 구성이 같으면 빌드로 세지 않는다(구성 변경 없는 재퇴장).
+/// 판매는 weapon_sold의 코드(실제 판매 총)를 쓰고, 코드가 없는 이전 빌드 로그만 같은 orderId의 마지막 빌드로 추정한다.
+/// 같은 코드는 세션 안에서 한 번만 해석한다.
+/// </summary>
+internal sealed class WeaponTracker
+{
+    private readonly WeaponDigest _digest;
+    private readonly Dictionary<string, WeaponLayout?> _decoded = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, string> _lastBuildByOrder = new(StringComparer.Ordinal);
+
+    public WeaponTracker(WeaponDigest digest)
+    {
+        _digest = digest;
+    }
+
+    public void WorkbenchExit(JsonElement data)
+    {
+        _digest.WorkbenchExits++;
+        WeaponLayout? layout = Layout(data, out bool exported);
+        if (!exported)
+        {
+            _digest.ExportFailed++;
+            return;
+        }
+
+        if (layout == null)
+        {
+            _digest.DecodeFailed++;
+            return;
+        }
+
+        string order = Text(data, "orderId");
+        if (_lastBuildByOrder.TryGetValue(order, out string? previous) && previous == layout.Key)
+        {
+            _digest.RepeatExits++;
+            return;
+        }
+
+        _lastBuildByOrder[order] = layout.Key;
+        Config(layout).Builds++;
+        _digest.CustomNamedBuilds += layout.CustomName ? 1 : 0;
+        _digest.ColoredBuilds += layout.Blocks.Any(b => b.HasColor) ? 1 : 0;
+    }
+
+    public void AttackInput(JsonElement data)
+    {
+        _digest.AttackInputs++;
+        if (Layout(data, out _) is { } layout)
+        {
+            _digest.AttackInputsDecoded++;
+            Config(layout).AttackInputs++;
+        }
+    }
+
+    /// <summary>공방 주간의 실제 발사(Shop / weapon_fired). 코드가 없으므로 구성 ID로만 묶는다.</summary>
+    public void ShopShot(JsonElement data)
+    {
+        string key = AssemblyId(data);
+        if (key.Length == 0)
+        {
+            _digest.ShopShotsWithoutId++;
+            return;
+        }
+
+        _digest.ShopShots++;
+        ConfigById(key).ShopShots++;
+    }
+
+    public void Sale(JsonElement data)
+    {
+        WeaponConfig? config = null;
+        if (Layout(data, out _) is { } sold)
+        {
+            config = Config(sold);
+            _digest.SalesWithCode++;
+        }
+        else if (Text(data, "weaponCode").Length == 0)
+        {
+            string order = Text(data, "orderId");
+            if (order.Length > 0 && _lastBuildByOrder.TryGetValue(order, out string? key))
+            {
+                config = _digest.Configs[key];
+                _digest.SalesInferred++;
+            }
+        }
+
+        if (config == null)
+        {
+            return;
+        }
+
+        config.Sold++;
+        if (data.ValueKind == JsonValueKind.Object && data.TryGetProperty("price", out JsonElement price)
+            && price.ValueKind == JsonValueKind.Number && price.TryGetDouble(out double p) && double.IsFinite(p))
+        {
+            config.PriceSum += p;
+            config.Priced++;
+        }
+
+        if (data.ValueKind == JsonValueKind.Object && data.TryGetProperty("satisfied", out JsonElement s)
+            && s.ValueKind is JsonValueKind.True or JsonValueKind.False)
+        {
+            config.SatisfiedKnown++;
+            config.Satisfied += s.ValueKind == JsonValueKind.True ? 1 : 0;
+        }
+    }
+
+    /// <summary>
+    /// 습격 구간 안의 총기 이벤트. 습격 시작은 휴대 총(코드·구성 ID), raid_weapon_config는 습격 중 처음 쓰는 구성,
+    /// weapon_fired는 실제 발사(구성 ID·위치)다.
+    /// </summary>
+    public void RaidEvent(RaidDigest raid, string name, JsonElement data)
+    {
+        switch (name)
+        {
+            case GameEvents.RaidStart:
+                if (Layout(data, out _) is { } loadout)
+                {
+                    raid.HasLoadout = true;
+                    Config(loadout).RaidLoadouts++;
+                }
+
+                break;
+
+            case GameEvents.RaidWeaponConfig:
+                raid.WeaponChanges++;
+                if (Layout(data, out _) is { } changed)
+                {
+                    Config(changed);
+                }
+
+                break;
+
+            case GameEvents.WeaponFired:
+                string key = AssemblyId(data);
+                if (key.Length == 0)
+                {
+                    raid.ShotsWithoutId++;
+                }
+                else
+                {
+                    ConfigById(key);
+                    raid.Shots.TryGetValue(key, out int shots);
+                    raid.Shots[key] = shots + 1;
+                }
+
+                if (data.ValueKind == JsonValueKind.Object && data.TryGetProperty("position", out JsonElement position)
+                    && position.ValueKind == JsonValueKind.Object
+                    && position.TryGetProperty("x", out JsonElement x) && x.ValueKind == JsonValueKind.Number
+                    && position.TryGetProperty("z", out JsonElement z) && z.ValueKind == JsonValueKind.Number)
+                {
+                    raid.ShotPoints.Add((float)x.GetDouble());
+                    raid.ShotPoints.Add((float)z.GetDouble());
+                }
+
+                break;
+        }
+    }
+
+    /// <summary>weaponCode를 해석한다. exported는 게임이 코드를 만들었는지(weaponCodeStatus=ok이고 코드가 있음)다.</summary>
+    private WeaponLayout? Layout(JsonElement data, out bool exported)
+    {
+        string code = Text(data, "weaponCode");
+        string status = Text(data, "weaponCodeStatus");
+        exported = code.Length > 0 && (status.Length == 0 || status == "ok");
+        if (!exported)
+        {
+            return null;
+        }
+
+        if (!_decoded.TryGetValue(code, out WeaponLayout? layout))
+        {
+            layout = WeaponCode.TryDecode(code);
+            _decoded[code] = layout;
+        }
+
+        return layout;
+    }
+
+    /// <summary>코드를 해석한 구성을 등록한다. 구성 ID만 보고 먼저 만든 항목이면 파츠 정보를 채운다.</summary>
+    private WeaponConfig Config(WeaponLayout layout)
+    {
+        WeaponConfig config = ConfigById(layout.Key);
+        if (!config.Known)
+        {
+            config.Known = true;
+            config.Tutorial = layout.IsTutorialDefault;
+            config.Parts = layout.PartCounts();
+            config.Blocks = layout.Blocks.Count;
+        }
+
+        return config;
+    }
+
+    private WeaponConfig ConfigById(string key)
+    {
+        if (!_digest.Configs.TryGetValue(key, out WeaponConfig? config))
+        {
+            config = new WeaponConfig { Key = key };
+            _digest.Configs[key] = config;
+        }
+
+        return config;
+    }
+
+    /// <summary>weaponAssemblyId. 상태가 ok가 아니면 빈 문자열.</summary>
+    private static string AssemblyId(JsonElement data)
+    {
+        string status = Text(data, "weaponAssemblyIdStatus");
+        return status.Length == 0 || status == "ok" ? Text(data, "weaponAssemblyId") : string.Empty;
+    }
+
+    private static string Text(JsonElement data, string name) =>
+        data.ValueKind == JsonValueKind.Object && data.TryGetProperty(name, out JsonElement value) && value.ValueKind == JsonValueKind.String
+            ? value.GetString()?.Trim() ?? string.Empty
+            : string.Empty;
 }
 
 /// <summary>습격 한 구간(습격 시작 ~ 종료 이벤트)의 요약.</summary>
@@ -742,6 +1209,13 @@ internal sealed class RaidDigest
     public int EnemiesKilled;
     public readonly List<float> Points = new();
     public readonly Dictionary<int, TimelineAccumulator> Timeline = new();
+
+    // 총기 — 습격 시작의 휴대 총, 습격 중 구성 교체, 실제 발사(구성 ID별 수와 x·z 위치)
+    public bool HasLoadout;
+    public int WeaponChanges;
+    public readonly Dictionary<string, int> Shots = new(StringComparer.Ordinal);
+    public int ShotsWithoutId;
+    public readonly List<float> ShotPoints = new();
 }
 
 /// <summary>타임라인 구간 하나의 상태 필드별 합계와 표본 수. 필드가 빠진 표본은 그 필드 평균에서 뺀다.</summary>
