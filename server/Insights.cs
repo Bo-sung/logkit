@@ -8,6 +8,7 @@ namespace LogServer;
 /// 주문의 수정 횟수는 같은 orderId의 작업대 퇴장 중 구성이 바뀐 횟수(WeaponTracker의 빌드와 같은 규칙)다.
 /// 낮·밤 구간: n일차 낮은 day=n인 첫 상점 이벤트부터 그날 첫 습격 시작까지, 밤은 그 습격 시작부터 다른 day의 첫 상점 이벤트까지다.
 /// 구간 시간은 실제 시각 차에서 일시정지(다음 이벤트까지)를 뺀 값이며, 세션의 마지막 구간은 Ended(이탈 구간)로 표시한다.
+/// 기록마다 그때의 saveId(System 이벤트)를 붙여 두고, 버전 집계(InsightPlayers)가 세이브 단위로 세션을 잇는다.
 /// </summary>
 internal sealed class InsightTracker
 {
@@ -27,6 +28,8 @@ internal sealed class InsightTracker
     private DateTime? _pauseStart;
     private DateTime? _raidStart;
     private DateTime _lastAt;
+    private string _saveId = string.Empty;
+    private InsightTutorial? _tutorial;
 
     public InsightTracker(InsightDigest digest)
     {
@@ -47,6 +50,85 @@ internal sealed class InsightTracker
         {
             _pauseStart = at;
         }
+    }
+
+    /// <summary>System·Game·Tutorial 이벤트. saveId를 갱신하고 파산과 튜토리얼 진행을 적는다.</summary>
+    public void Other(string category, string name, JsonElement data)
+    {
+        string save = Text(data, "saveId");
+        if (save.Length > 0)
+        {
+            _saveId = save;
+        }
+
+        if (category == GameEvents.GameCategory && name == GameEvents.Bankrupt && _phase != null)
+        {
+            _phase.Bankrupt = true;
+        }
+
+        if (category == GameEvents.TutorialCategory)
+        {
+            Tutorial(name, data);
+        }
+    }
+
+    /// <summary>
+    /// 튜토리얼 이벤트. 같은 sequence의 단계가 끝(tutorial_ended·tutorial_skipped) 없이 이어지면 한 번의 진행으로 묶는다.
+    /// debugSkipped(에디터 F3 넘기기)가 하나라도 있으면 Debug로 표시해 통계에서 뺀다.
+    /// </summary>
+    private void Tutorial(string name, JsonElement data)
+    {
+        string sequence = Text(data, "sequence");
+        switch (name)
+        {
+            case GameEvents.TutorialStepStarted:
+                Step(TutorialRun(sequence), data);
+                break;
+
+            case GameEvents.TutorialStepCompleted:
+                InsightTutorial run = TutorialRun(sequence);
+                InsightTutorialStep step = Step(run, data);
+                step.Completed = true;
+                step.Duration = Number(data, "duration") ?? step.Duration;
+                run.Debug |= Bool(data, "debugSkipped") == true;
+                break;
+
+            case GameEvents.TutorialSkipped:
+                TutorialRun(sequence).Outcome = "skipped";
+                _tutorial = null;
+                break;
+
+            case GameEvents.TutorialEnded:
+                string reason = Text(data, "reason");
+                TutorialRun(sequence).Outcome = reason.Length > 0 ? reason : "ended";
+                _tutorial = null;
+                break;
+        }
+    }
+
+    private InsightTutorial TutorialRun(string sequence)
+    {
+        if (_tutorial == null || _tutorial.Sequence != sequence)
+        {
+            _tutorial = new InsightTutorial { Sequence = sequence, SaveId = _saveId };
+            _digest.Tutorials.Add(_tutorial);
+        }
+
+        return _tutorial;
+    }
+
+    private static InsightTutorialStep Step(InsightTutorial run, JsonElement data)
+    {
+        int index = Number(data, "stepIndex") is double i ? (int)i : -1;
+        string id = Text(data, "stepId");
+        InsightTutorialStep? step = run.Steps.Find(x => x.Index == index && x.Id == id);
+        if (step == null)
+        {
+            step = new InsightTutorialStep { Index = index, Id = id };
+            run.Steps.Add(step);
+        }
+
+        return step;
     }
 
     /// <summary>Shop 이벤트 하나. 모든 이벤트의 day로 현재 일차를 갱신하고, 일차가 바뀌면 새 낮 구간을 연다.</summary>
@@ -148,7 +230,16 @@ internal sealed class InsightTracker
         }
 
         _raidStart = at;
-        _raid = new InsightRaid { Day = _day, Stage = scene };
+        // 습격 시작의 day(출발한 공방의 일차, 습격 씬 직접 실행은 -1)가 있으면 그 값을 쓴다
+        int? raidDay = Number(data, "day") is double d && d >= 0 ? (int)d : _day;
+        _raid = new InsightRaid
+        {
+            Day = raidDay,
+            Stage = scene,
+            SaveId = _saveId,
+            Penetration = Number(data, "penetration"),
+            Explosion = Number(data, "explosion"),
+        };
         _digest.Raids.Add(_raid);
         if (Layout(data) is { } loadout)
         {
@@ -162,7 +253,7 @@ internal sealed class InsightTracker
     {
         if (_raid == null)
         {
-            _raid = new InsightRaid { Day = _day, Stage = scene };
+            _raid = new InsightRaid { Day = _day, Stage = scene, SaveId = _saveId };
             _digest.Raids.Add(_raid);
         }
 
@@ -281,7 +372,7 @@ internal sealed class InsightTracker
     private void StartPhase(DateTime at, int day, bool night)
     {
         ClosePhase(at);
-        _phase = new InsightPhase { Day = day, Night = night };
+        _phase = new InsightPhase { Day = day, Night = night, SaveId = _saveId };
         _phaseStart = at;
         _phasePaused = 0;
     }
@@ -320,7 +411,7 @@ internal sealed class InsightTracker
 
         if (!_days.TryGetValue(day, out InsightDay? record))
         {
-            record = new InsightDay { Day = day };
+            record = new InsightDay { Day = day, SaveId = _saveId };
             _days[day] = record;
         }
 
@@ -337,7 +428,7 @@ internal sealed class InsightTracker
 
         if (!_orders.TryGetValue(orderId, out InsightOrder? order))
         {
-            order = new InsightOrder { Day = _day };
+            order = new InsightOrder { Day = _day, OrderId = orderId, SaveId = _saveId };
             _orders[orderId] = order;
         }
 
@@ -388,6 +479,143 @@ internal sealed class InsightDigest
     public readonly List<InsightOrder> Orders = new();
     public readonly List<InsightRaid> Raids = new();
     public readonly List<InsightPhase> Phases = new();
+    public readonly List<InsightTutorial> Tutorials = new();
+}
+
+/// <summary>
+/// 한 버전의 세션 기록을 플레이어 단위로 합친다. 플레이어 = saveId(같은 세이브를 이어 한 세션들), saveId가 없는 이전 로그는 세션이다.
+/// 저장을 불러와 이어 한 경우를 이탈로 세지 않도록 이탈·재도전은 플레이어의 시간순 기록 전체로 다시 정하고,
+/// 같은 주문(orderId)·같은 일차·이어지는 같은 구간·끝나지 않은 같은 튜토리얼은 하나로 합친다.
+/// </summary>
+internal static class InsightPlayers
+{
+    public static InsightVersion Combine(string version, List<(SessionRow Row, InsightDigest Digest)> sessions)
+    {
+        InsightVersion v = new() { Version = version, Sessions = sessions.Count };
+        Dictionary<string, int> players = new(StringComparer.Ordinal);
+        Dictionary<string, InsightOrder> orders = new(StringComparer.Ordinal);
+        Dictionary<(int Player, int Day), InsightDay> days = new();
+        Dictionary<int, InsightPhase> lastPhase = new();
+        Dictionary<int, InsightTutorial> openTutorial = new();
+
+        for (int s = 0; s < sessions.Count; s++)
+        {
+            int session = s;
+            int Player(string saveId)
+            {
+                string key = saveId.Length > 0 ? "save:" + saveId : "session:" + session;
+                if (!players.TryGetValue(key, out int p))
+                {
+                    p = players.Count;
+                    players[key] = p;
+                }
+
+                return p;
+            }
+
+            InsightDigest digest = sessions[s].Digest;
+            bool clean = sessions[s].Row.EndedCleanly;
+            foreach (InsightDay day in digest.Days)
+            {
+                int p = Player(day.SaveId);
+                if (days.TryGetValue((p, day.Day), out InsightDay? same))
+                {
+                    same.Sales += day.Sales;
+                    same.SalesSum += day.SalesSum;
+                    same.Priced += day.Priced;
+                    same.Satisfied += day.Satisfied;
+                    same.Builds.AddRange(day.Builds);
+                    continue;
+                }
+
+                InsightDay copy = day.ForSession(p);
+                copy.Builds = new List<Dictionary<string, int>>(day.Builds);
+                days[(p, day.Day)] = copy;
+                v.Days.Add(copy);
+            }
+
+            foreach (InsightOrder order in digest.Orders)
+            {
+                if (orders.TryGetValue(order.OrderId, out InsightOrder? same))
+                {
+                    same.Merge(order);
+                    continue;
+                }
+
+                InsightOrder copy = order.ForSession(Player(order.SaveId));
+                orders[order.OrderId] = copy;
+                v.Orders.Add(copy);
+            }
+
+            v.Raids.AddRange(digest.Raids.Select(r => r.ForSession(Player(r.SaveId))));
+
+            foreach (InsightPhase phase in digest.Phases)
+            {
+                int p = Player(phase.SaveId);
+                if (lastPhase.TryGetValue(p, out InsightPhase? previous) && previous.Day == phase.Day
+                    && (previous.Night == phase.Night || previous.Night))
+                {
+                    // 같은 구간을 다음 세션에서 이어 함(저장 불러오기). 밤에 끄고 불러오면 첫 상점 이벤트가 같은 일차의 낮을 열지만 밤이 이어진 것이다.
+                    previous.Seconds += phase.Seconds;
+                    previous.RaidSeconds = previous.RaidSeconds.HasValue || phase.RaidSeconds.HasValue
+                        ? (previous.RaidSeconds ?? 0) + (phase.RaidSeconds ?? 0)
+                        : null;
+                    previous.LastRaid = phase.LastRaid.Length > 0 ? phase.LastRaid : previous.LastRaid;
+                    previous.Bankrupt |= phase.Bankrupt;
+                    previous.CleanEnd = clean;
+                    continue;
+                }
+
+                InsightPhase copy = phase.ForSession(p, clean);
+                lastPhase[p] = copy;
+                v.Phases.Add(copy);
+            }
+
+            foreach (InsightTutorial run in digest.Tutorials)
+            {
+                int p = Player(run.SaveId);
+                if (openTutorial.TryGetValue(p, out InsightTutorial? open) && open.Sequence == run.Sequence && open.Outcome.Length == 0)
+                {
+                    open.Absorb(run);
+                }
+                else
+                {
+                    open = run.ForSession(p);
+                    v.Tutorials.Add(open);
+                }
+
+                openTutorial[p] = open;
+            }
+        }
+
+        // 이탈 = 플레이어의 마지막 구간, 재도전 = 실패 뒤 같은 플레이어의 습격이 더 있음
+        HashSet<InsightPhase> last = new(lastPhase.Values);
+        foreach (InsightPhase phase in v.Phases)
+        {
+            phase.Ended = last.Contains(phase);
+        }
+
+        foreach (IGrouping<int, InsightRaid> group in v.Raids.GroupBy(r => r.S))
+        {
+            List<InsightRaid> list = group.ToList();
+            for (int i = 0; i < list.Count; i++)
+            {
+                if (list[i].Survived != false)
+                {
+                    continue;
+                }
+
+                string stage = list[i].Stage;
+                List<InsightRaid> later = list.Skip(i + 1).ToList();
+                list[i].Retried = later.Count > 0;
+                list[i].RetriedSameStage = later.Any(r => r.Stage == stage);
+            }
+        }
+
+        v.Players = players.Count;
+        v.PlayersWithSave = players.Keys.Count(k => k.StartsWith("save:", StringComparison.Ordinal));
+        return v;
+    }
 }
 
 /// <summary>
@@ -495,10 +723,71 @@ public sealed class InsightVersion
 {
     public string Version { get; set; } = string.Empty;
     public int Sessions { get; set; }
+
+    /// <summary>플레이어 수(saveId 단위, saveId가 없으면 세션 단위)와 그중 saveId로 묶인 수.</summary>
+    public int Players { get; set; }
+    public int PlayersWithSave { get; set; }
     public List<InsightDay> Days { get; set; } = new();
     public List<InsightOrder> Orders { get; set; } = new();
     public List<InsightRaid> Raids { get; set; } = new();
     public List<InsightPhase> Phases { get; set; } = new();
+    public List<InsightTutorial> Tutorials { get; set; } = new();
+}
+
+/// <summary>
+/// 튜토리얼 sequence 한 번의 진행. Outcome은 tutorial_ended의 reason(completed, cancelled, abandoned, error, debug_ended),
+/// 건너뛰기면 skipped, 끝 기록 없이 끝났으면 빈 문자열(앱 종료 — 마지막 시작 단계에서 멈춤)이다. Debug면 통계에서 뺀다.
+/// </summary>
+public sealed class InsightTutorial
+{
+    public int S { get; set; }
+    public string Sequence { get; set; } = string.Empty;
+    public string Outcome { get; set; } = string.Empty;
+    public bool Debug { get; set; }
+    public List<InsightTutorialStep> Steps { get; set; } = new();
+
+    [System.Text.Json.Serialization.JsonIgnore]
+    internal string SaveId { get; set; } = string.Empty;
+
+    /// <summary>플레이어 번호를 붙인 복사본(단계 목록도 복사). 캐시된 세션 기록은 바꾸지 않는다.</summary>
+    internal InsightTutorial ForSession(int s)
+    {
+        InsightTutorial copy = (InsightTutorial)MemberwiseClone();
+        copy.S = s;
+        copy.Steps = Steps.Select(x => x.Copy()).ToList();
+        return copy;
+    }
+
+    /// <summary>다음 세션에서 이어진 같은 진행을 합친다.</summary>
+    internal void Absorb(InsightTutorial next)
+    {
+        foreach (InsightTutorialStep step in next.Steps)
+        {
+            InsightTutorialStep? same = Steps.Find(x => x.Index == step.Index && x.Id == step.Id);
+            if (same == null)
+            {
+                Steps.Add(step.Copy());
+                continue;
+            }
+
+            same.Completed |= step.Completed;
+            same.Duration = step.Duration ?? same.Duration;
+        }
+
+        Outcome = next.Outcome;
+        Debug |= next.Debug;
+    }
+}
+
+/// <summary>튜토리얼 단계 하나. 시작 기록이 있으면 목록에 있고, Duration은 step_completed의 duration(실제 초)이다.</summary>
+public sealed class InsightTutorialStep
+{
+    public int Index { get; set; }
+    public string Id { get; set; } = string.Empty;
+    public bool Completed { get; set; }
+    public double? Duration { get; set; }
+
+    internal InsightTutorialStep Copy() => (InsightTutorialStep)MemberwiseClone();
 }
 
 /// <summary>
@@ -516,6 +805,12 @@ public sealed class InsightPhase
     public bool Ended { get; set; }
     public string LastRaid { get; set; } = string.Empty;
     public bool CleanEnd { get; set; }
+
+    /// <summary>이 구간에서 파산(Game / bankrupt)했으면 true.</summary>
+    public bool Bankrupt { get; set; }
+
+    [System.Text.Json.Serialization.JsonIgnore]
+    internal string SaveId { get; set; } = string.Empty;
 
     /// <summary>세션 번호와 정상 종료 여부를 붙인 얕은 복사본. 캐시된 세션 기록은 바꾸지 않는다.</summary>
     internal InsightPhase ForSession(int s, bool cleanEnd)
@@ -537,6 +832,9 @@ public sealed class InsightDay
     public int Priced { get; set; }
     public int Satisfied { get; set; }
     public List<Dictionary<string, int>> Builds { get; set; } = new();
+
+    [System.Text.Json.Serialization.JsonIgnore]
+    internal string SaveId { get; set; } = string.Empty;
 
     /// <summary>세션 번호를 붙인 얕은 복사본. 캐시된 세션 기록은 바꾸지 않는다.</summary>
     internal InsightDay ForSession(int s)
@@ -560,6 +858,28 @@ public sealed class InsightOrder
     public bool Sold { get; set; }
     public double? Price { get; set; }
     public bool? Satisfied { get; set; }
+
+    [System.Text.Json.Serialization.JsonIgnore]
+    internal string OrderId { get; set; } = string.Empty;
+
+    [System.Text.Json.Serialization.JsonIgnore]
+    internal string SaveId { get; set; } = string.Empty;
+
+    /// <summary>다른 세션에 다시 기록된 같은 주문(저장 불러오기의 order_restored 등)을 합친다.</summary>
+    internal void Merge(InsightOrder other)
+    {
+        Npc = Npc.Length > 0 ? Npc : other.Npc;
+        Day = Day.HasValue && other.Day.HasValue ? Math.Min(Day.Value, other.Day.Value) : Day ?? other.Day;
+        Builds += other.Builds;
+        BuildsAfterTest += other.BuildsAfterTest;
+        Tests += other.Tests;
+        WorkbenchSeconds = WorkbenchSeconds.HasValue || other.WorkbenchSeconds.HasValue
+            ? (WorkbenchSeconds ?? 0) + (other.WorkbenchSeconds ?? 0)
+            : null;
+        Sold |= other.Sold;
+        Price ??= other.Price;
+        Satisfied ??= other.Satisfied;
+    }
 
     /// <summary>세션 번호를 붙인 얕은 복사본. 캐시된 세션 기록은 바꾸지 않는다.</summary>
     internal InsightOrder ForSession(int s)
@@ -595,6 +915,13 @@ public sealed class InsightRaid
     public int ResponseCount { get; set; }
     public bool? Retried { get; set; }
     public bool? RetriedSameStage { get; set; }
+
+    /// <summary>습격 시작에 기록된 총의 관통·폭발 수치(총구 중 최댓값, 방사 절반 반영). 이후 빌드부터.</summary>
+    public double? Penetration { get; set; }
+    public double? Explosion { get; set; }
+
+    [System.Text.Json.Serialization.JsonIgnore]
+    internal string SaveId { get; set; } = string.Empty;
 
     /// <summary>세션 번호를 붙인 얕은 복사본. 캐시된 세션 기록은 바꾸지 않는다.</summary>
     internal InsightRaid ForSession(int s)

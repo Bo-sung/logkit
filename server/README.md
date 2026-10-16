@@ -208,6 +208,9 @@ category와 message로 식별하고 data_json 필드를 읽는다. 규칙은 `ar
 
 ## 가설·일반 통계 (/insights)
 
-`http://localhost:5000/insights`는 개선안 검증용 차트를 버전별로 비교한다. 플레이어 단위는 세션, 일차는 상점 이벤트의 `day`, 습격은 직전 일차의 밤이다.
-습격 총은 `습격 시작`의 코드, 없으면 그 습격에서 가장 많이 쏜 구성(같은 세션에서 코드를 본 것)이다. 금고 관통 내성은 로그·스테이지 표에 없어 스테이지별로 보여 주고,
-튜토리얼 퍼널은 단계 기록이 없어 필요한 로그만 안내한다. 손님 이름표(`Insights.cs` `CustomerNames`)는 게임 `CustomerOrderData.json` 기준이다.
+`http://localhost:5000/insights`는 개선안 검증용 차트를 버전별로 비교한다. 플레이어 단위는 세이브(`saveId` — 저장 불러오기로 이어 한 세션을 합침)이며
+saveId가 없는 이전 로그는 세션이다. 일차는 상점 이벤트의 `day`, 습격은 `습격 시작`의 `day`(없으면 직전 일차)의 밤이다.
+같은 주문(`orderId`)은 여러 세션에 기록돼도 하나로 합치고, 이탈은 플레이어의 마지막 낮·밤 구간이다(파산은 `Game / bankrupt`).
+습격 총은 `습격 시작`의 코드, 없으면 그 습격에서 가장 많이 쏜 구성(같은 세션에서 코드를 본 것)이고, 관통 수치는 `습격 시작`의 `penetration`이다.
+금고 관통 내성은 현재 씬 값(은행 3, 나머지 1)을 임시로 쓴다. 튜토리얼 퍼널은 `Tutorial / step_started·step_completed·tutorial_skipped·tutorial_ended`로 그리며
+`debugSkipped`가 있는 진행은 뺀다. 손님 이름표(`Insights.cs` `CustomerNames`)는 게임 `CustomerOrderData.json` 기준이다.

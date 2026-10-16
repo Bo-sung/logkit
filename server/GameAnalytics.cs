@@ -34,8 +34,16 @@ internal static class GameEvents
 
     public const string GameCategory = "Game";
     public const string Pause = "일시정지";                   // 일시정지 해제 또는 다음 이벤트까지를 정지 시간으로 본다
+    public const string Bankrupt = "bankrupt";                // day, balance, rent — 정산 때 자리세를 못 낸 순간
+    public const string SystemCategory = "System";           // 씬 시작·새 게임 시작·저장 게임 시작(...)에 installId, saveId
 
-    public const string RaidStart = "습격 시작";              // scene, weaponCode, weaponAssemblyId (휴대 총은 이후 빌드부터)
+    public const string TutorialCategory = "Tutorial";
+    public const string TutorialStepStarted = "step_started";     // sequence, stepId, stepIndex, time
+    public const string TutorialStepCompleted = "step_completed"; // sequence, stepId, stepIndex, time, duration, debugSkipped
+    public const string TutorialSkipped = "tutorial_skipped";     // sequence, reason
+    public const string TutorialEnded = "tutorial_ended";         // sequence, lastStepId, lastStepIndex, reason, time
+
+    public const string RaidStart = "습격 시작";              // scene, day, weaponCode, weaponAssemblyId, penetration, explosion (이후 빌드부터)
     public const string PlayerState = "플레이어 상태";        // time, position{x,y,z}, cameraRotation, health, remainingModuleCrates, remainingMaterialCrates, tanks, helicopters
     public const string BlockDestroyed = "블록 파괴";         // stageId, time, blockId
     public const string EnemySpawn = "적 생성";               // time, enemyId
@@ -133,18 +141,7 @@ public sealed class GameAnalytics
         {
             List<(SessionRow Row, SessionDigest Digest)> sessions = byVersion[version];
             sessions.Sort((a, b) => string.CompareOrdinal(a.Row.DateUtc, b.Row.DateUtc));
-            InsightVersion v = new() { Version = version, Sessions = sessions.Count };
-            for (int s = 0; s < sessions.Count; s++)
-            {
-                InsightDigest digest = sessions[s].Digest.Insights;
-                v.Days.AddRange(digest.Days.Select(x => x.ForSession(s)));
-                v.Orders.AddRange(digest.Orders.Select(x => x.ForSession(s)));
-                v.Raids.AddRange(digest.Raids.Select(x => x.ForSession(s)));
-                bool clean = sessions[s].Row.EndedCleanly;
-                v.Phases.AddRange(digest.Phases.Select(x => x.ForSession(s, clean)));
-            }
-
-            response.Versions.Add(v);
+            response.Versions.Add(InsightPlayers.Combine(version, sessions.Select(x => (x.Row, x.Digest.Insights)).ToList()));
         }
 
         return response;
@@ -328,6 +325,11 @@ public sealed class GameAnalytics
                 {
                     ExitWorkbench(at, entry.Scene);
                 }
+            }
+            else if (Is(entry.Category, GameEvents.SystemCategory) || Is(entry.Category, GameEvents.GameCategory)
+                || Is(entry.Category, GameEvents.TutorialCategory))
+            {
+                insights.Other(entry.Category, name, ParseData(entry.DataJson));
             }
             else if (Is(entry.Category, GameEvents.RaidCategory))
             {

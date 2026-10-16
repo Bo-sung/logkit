@@ -53,7 +53,7 @@ public static class InsightsPage
     <div id="vchips" class="row"></div>
     <div class="row" style="margin-top:10px">
       <span class="muted">단일 버전 차트(낮·밤, 히트맵)</span><select id="hver"></select>
-      <span class="muted">플레이어 = 세션(게임 실행 1회) · 일차 = 상점 이벤트의 day (0일차 = 튜토리얼) · 습격은 직전 일차의 밤</span>
+      <span class="muted">플레이어 = 세이브(saveId — 저장 불러오기로 이어 한 세션을 합침, saveId가 없는 이전 로그는 세션) · 일차 = 상점 이벤트의 day (0일차 = 튜토리얼) · 습격은 습격 시작의 day(없으면 직전 일차)</span>
     </div>
     <p class="sub" id="coverage" style="margin:6px 0 0"></p>
   </section>
@@ -73,7 +73,7 @@ public static class InsightsPage
     </div>
     <div class="legend" style="margin-top:8px"><span><i style="background:#c98500"></i>낮</span><span><i style="background:#3987e5"></i>밤</span></div>
     <div id="c-phase" class="chart"></div>
-    <p class="sub" style="margin:6px 0 0">이탈 = 세션이 그 구간에서 끝남(게임을 끄거나 크래시). 플레이어 ID가 없어 나중에 이어하기한 경우도 이탈로 셉니다.
+    <p class="sub" style="margin:6px 0 0">이탈 = 플레이어의 마지막 구간(그 뒤로 같은 세이브의 기록이 없음). 저장을 불러와 이어 했으면 이탈이 아닙니다. saveId가 없는 이전 로그는 세션이 끝난 구간을 이탈로 셉니다.
       게임에 클리어가 없고 1~7일차가 고정 일차, 8일차부터 무한 모드입니다(무한 표시). 이탈 구간의 시간은 중간에 끊긴 값이라 기본으로 위 분포에서 뺍니다.</p>
   </section>
 
@@ -81,21 +81,30 @@ public static class InsightsPage
 
   <section class="card">
     <div class="q">스테이지 선택 화면의 금고 내성 표기가 준비에 도움이 되는가?</div>
-    <h3>스테이지별 습격 총 관통 모듈 수</h3>
-    <p class="sub">습격 1회 = 1 · 습격 총은 습격 시작 코드, 없으면 그 습격에서 가장 많이 쏜 구성(세션에서 코드를 본 것) ·
-      x축은 스테이지(입장 비용 순)와 현재 씬의 금고 관통 내성(은행 3, 나머지 1 — 기획 대표 값 미정)입니다. 관통 수치 대신 관통 모듈 개수를 씁니다.</p>
+    <div class="row" style="justify-content:space-between">
+      <h3>스테이지별 습격 총 관통</h3>
+      <select id="vaultmetric">
+        <option value="stat">관통 수치 (습격 시작 기록)</option>
+        <option value="modules">관통 모듈 개수</option>
+      </select>
+    </div>
+    <p class="sub">습격 1회 = 1 · x축은 스테이지(입장 비용 순)와 현재 씬의 금고 관통 내성(은행 3, 나머지 1 — 기획 대표 값 미정) ·
+      관통 수치 = 총구 중 최댓값(방사 절반 반영, 차지 배율 제외) · 모듈 개수는 습격 시작 코드, 없으면 그 습격에서 가장 많이 쏜 구성으로 셈</p>
     <div id="c-vault" class="chart"></div>
   </section>
 
   <section class="card">
     <div class="q">튜토리얼 행동 가이드 상시 표시가 막힘을 줄이는가?</div>
-    <h3>단계별 퍼널 · 단계 소요 시간</h3>
-    <p class="sub">지금 로그에 튜토리얼 단계 기록이 없어 그릴 수 없습니다. 아래 기록이 들어오면 추가합니다.</p>
-    <div class="missing">
-      <div><b>튜토리얼 단계 시작·완료</b>단계 ID, 시각(또는 게임 시간) — 퍼널과 단계 소요 시간</div>
-      <div><b>가이드 표시 정책</b>세션(또는 단계)마다 상시 표시/기존 방식 — 정책별 비교</div>
-      <div><b>튜토리얼 중단</b>마지막으로 도달한 단계 — 어디서 멈췄는지</div>
+    <div class="row" style="justify-content:space-between">
+      <h3>단계별 퍼널 · 단계 소요 시간</h3>
+      <div class="row"><span class="muted">시퀀스</span><select id="tutseq"></select></div>
     </div>
+    <p class="sub">퍼널 = 그 단계를 시작한 진행 / 튜토리얼을 시작한 진행 · 소요 시간 = step_completed의 duration(실제 초) ·
+      에디터 단계 넘기기(debugSkipped)가 있는 진행과 건너뛰기는 퍼널에서 뺌 · 가이드 표시 정책 필드가 없어 정책 비교 대신 버전끼리 비교합니다.</p>
+    <div id="t-tutorial"></div>
+    <div id="c-funnel" class="chart scroll" style="margin-top:8px"></div>
+    <div class="muted" style="font-size:12px;margin:10px 0 4px">단계 소요 시간</div>
+    <div id="c-steptime" class="chart scroll"></div>
   </section>
 
   <section class="card wide">
@@ -115,7 +124,7 @@ public static class InsightsPage
     <div class="row" style="justify-content:space-between">
       <div><div class="q">장비 보존·입장료 방식이 실패 후 재도전을 늘리는가?</div>
         <h3>습격 실패 뒤 재도전 비율</h3>
-        <p class="sub" style="margin:0">습격 실패 1회 = 1 · 재도전 = 같은 세션에서 이후 다시 습격함 · 색 = 재도전, 회색 = 재도전 안 함</p></div>
+        <p class="sub" style="margin:0">습격 실패 1회 = 1 · 재도전 = 같은 플레이어가 이후 다시 습격함(저장 불러오기 포함) · 색 = 재도전, 회색 = 재도전 안 함</p></div>
       <select id="retrymode">
         <option value="retried">아무 스테이지나 다시 습격</option>
         <option value="retriedSameStage">같은 스테이지 다시 습격</option>
@@ -200,7 +209,11 @@ public static class InsightsPage
 습격 일차  습격 시작 직전에 본 day (그날 밤 습격)
 낮·밤      낮 = day=n인 첫 상점 이벤트 → 그날 첫 습격 시작, 밤 = 첫 습격 시작 → 다른 day의 첫 상점 이벤트.
            시간 = 실제 시각 차 − 일시정지(일시정지 → 다음 이벤트). 습격 중 시간 = 습격 시작 → 종료 합
-이탈       세션의 마지막 구간. 정상 종료 여부는 세션 요약의 endedCleanly
+이탈       플레이어(saveId)의 마지막 구간. saveId가 없는 이전 로그는 세션의 마지막 구간. 정상 종료 여부는 세션 요약의 endedCleanly,
+           파산은 Game / bankrupt
+플레이어   System / 씬 시작·새 게임 시작·저장 게임 시작의 saveId. 같은 주문(orderId)은 여러 세션에 기록돼도 하나로 합침
+튜토리얼   Tutorial / step_started·step_completed(duration, debugSkipped)·tutorial_skipped·tutorial_ended(reason).
+           끝 기록 없이 끝난 진행은 마지막으로 시작한 단계에서 멈춘 것으로 봄
 수익       Shop / weapon_sold price 합 (+ 선택 시 습격 종료의 moduleCrateCredits + materialCrateCredits)
 조건 만족  Shop / weapon_sold satisfied = true 횟수
 수정 횟수  같은 orderId의 workbench_exited 중 구성(weaponCode)이 직전과 달라진 횟수. 시험 사격 뒤 = 그 주문의 첫 attack_input 이후
@@ -209,7 +222,7 @@ public static class InsightsPage
 습격 총    NightRaid / 습격 시작의 weaponCode. 없으면 그 습격의 weapon_fired 중 가장 많이 쏜 weaponAssemblyId를
            같은 세션에서 코드로 본 구성으로 풀어 씀. 둘 다 없으면 총 미확인
 성공       습격 종료 이벤트의 survived
-재도전     실패(survived = false)한 습격 뒤 같은 세션에 습격이 더 있음. 세션이 끝나면 재도전 안 함으로 셈
+재도전     실패(survived = false)한 습격 뒤 같은 플레이어의 습격이 더 있음. 그 뒤 기록이 없으면 재도전 안 함으로 셈
 대응 시간  같은 습격의 적 발견 → 적 처치(enemyId, time). 발견 없이 처치된 적은 뺌
 박스플롯   상자 = 1~3사분위, 가운데 선 = 중앙값, 수염 = 1.5×IQR 안의 최솟값·최댓값, 점 = 그 밖의 값</pre>
     </details>
@@ -428,6 +441,7 @@ function renderPhase() {
       ended: new Set(ended.map((p) => p.s)).size,
       afterFail: ended.filter((p) => p.lastRaid === "fail").length,
       crash: ended.filter((p) => !p.cleanEnd).length,
+      bankrupt: ended.filter((p) => p.bankrupt).length,
     };
   }));
   let max = 0;
@@ -471,6 +485,7 @@ function renderPhase() {
         const lines = [v.version + " · " + label, "이탈률 " + pct(r), "도달 " + cell.reached + "명 · 이탈 " + cell.ended + "명"];
         if (slot.night) lines.push("  그중 습격 실패 직후 " + cell.afterFail + "명");
         lines.push("  그중 비정상 종료 " + cell.crash + "명");
+        lines.push("  그중 파산 " + cell.bankrupt + "명");
         s += '<rect x="' + (x - gap / 2) + '" y="' + rateTop + '" width="' + (bw + gap) + '" height="' + rateH +
           '" fill="transparent" data-tip="' + esc(lines.join(NL)) + '"/>';
       }
@@ -482,12 +497,54 @@ function renderPhase() {
 
 // ─── 가설 통계 ───
 function renderVault(vs) {
+  const stat = $("vaultmetric").value === "stat";
+  const valueOf = (r) => stat ? r.penetration : r.parts ? part(r.parts, "관통") : null;
   const seen = new Set();
-  vs.forEach((v) => v.raids.forEach((r) => { if (r.parts) seen.add(r.stage); }));
+  vs.forEach((v) => v.raids.forEach((r) => { if (valueOf(r) != null) seen.add(r.stage); }));
   const order = state.data.stages.map((s) => s.scene).filter((s) => seen.has(s));
   [...seen].filter((s) => !order.includes(s)).sort().forEach((s) => order.push(s));
-  boxV($("c-vault"), vs, order, (v, stage) => v.raids.filter((r) => r.parts && r.stage === stage).map((r) => part(r.parts, "관통")),
-    (x) => num(x, 1) + "개", stageVaultLabel);
+  boxV($("c-vault"), vs, order, (v, stage) => v.raids.filter((r) => r.stage === stage).map(valueOf).filter((x) => x != null),
+    (x) => num(x, 1) + (stat ? "" : "개"), stageVaultLabel);
+}
+
+// ─── 튜토리얼 ───
+const OUTCOMES = [["completed", "완료"], ["skipped", "건너뛰기"], ["abandoned", "중단(메뉴·파산)"], ["cancelled", "취소"],
+  ["", "기록 없이 종료(앱 종료)"], ["error", "오류"], ["debug_ended", "디버그 종료"]];
+function renderTutorial(vs) {
+  const all = vs.flatMap((v) => v.tutorials);
+  const seqs = [...new Set(all.map((t) => t.sequence))].sort();
+  const sel = $("tutseq"), prev = sel.value || loadPrefs().tutseq;
+  sel.innerHTML = seqs.map((s) => '<option value="' + esc(s) + '">' + esc(s || "(이름 없음)") + "</option>").join("");
+  if (seqs.includes(prev)) sel.value = prev;
+  const seq = sel.value;
+  if (!seqs.length) {
+    $("t-tutorial").innerHTML = emptyBox("튜토리얼 기록이 없습니다. 튜토리얼 로그(Tutorial / step_started 등)를 넣은 빌드부터 쌓입니다.");
+    $("c-funnel").innerHTML = ""; $("c-steptime").innerHTML = "";
+    return;
+  }
+  const runsOf = (v) => v.tutorials.filter((t) => t.sequence === seq && !t.debug);
+  let rows = "";
+  vs.forEach((v) => {
+    const runs = runsOf(v);
+    if (!runs.length) return;
+    rows += "<tr><td>" + esc(v.version) + "</td><td>" + runs.length + "</td>" +
+      OUTCOMES.map(([k]) => { const n = runs.filter((t) => t.outcome === k).length; return "<td>" + n + " <span class=\"muted\">" + pct(n / runs.length, 0) + "</span></td>"; }).join("") +
+      "<td>" + v.tutorials.filter((t) => t.sequence === seq && t.debug).length + "</td></tr>";
+  });
+  $("t-tutorial").innerHTML = rows ? '<div class="tablewrap"><table><tr><th>버전</th><th>진행</th>' +
+    OUTCOMES.map(([, n]) => "<th>" + esc(n) + "</th>").join("") + "<th>디버그 제외</th></tr>" + rows + "</table></div>" : emptyBox("이 시퀀스의 기록이 없습니다.");
+  const steps = new Map();
+  vs.forEach((v) => runsOf(v).forEach((t) => t.steps.forEach((s) => steps.set(s.index + "|" + s.id, s))));
+  const keys = [...steps.values()].sort((a, b) => a.index - b.index || a.id.localeCompare(b.id)).map((s) => s.index + ". " + s.id);
+  const keyOf = (s) => s.index + ". " + s.id;
+  hbars($("c-funnel"), vs, keys, (v, key) => {
+    const runs = runsOf(v).filter((t) => t.outcome !== "skipped");
+    if (!runs.length) return null;
+    const n = runs.filter((t) => t.steps.some((s) => keyOf(s) === key)).length;
+    return { value: n / runs.length, label: pct(n / runs.length, 0), tip: "도달 " + n + " / " + runs.length + "회 진행 (" + pct(n / runs.length) + ")" };
+  }, 1, false, 220);
+  boxH($("c-steptime"), vs, keys, (v, key) => runsOf(v).flatMap((t) => t.steps.filter((s) => keyOf(s) === key && s.completed && s.duration != null).map((s) => s.duration)),
+    (x) => num(x, 1) + "초");
 }
 
 function renderNpc(vs) {
@@ -644,8 +701,8 @@ function renderModules() {
 function renderCoverage(vs) {
   const txt = vs.map((v) => {
     const known = v.raids.filter((r) => r.parts).length;
-    const dayed = v.days.length;
-    return v.version + ": 습격 " + v.raids.length + "회 중 총 확인 " + known + "회 · 플레이어-일차 " + dayed + "개 · 주문 " + v.orders.length + "건";
+    return v.version + ": 플레이어 " + v.players + "명(세이브 " + v.playersWithSave + ") · 습격 " + v.raids.length + "회 중 총 확인 " + known +
+      "회 · 튜토리얼 " + v.tutorials.length + "회 · 주문 " + v.orders.length + "건";
   });
   $("coverage").textContent = txt.join("  |  ");
 }
@@ -666,6 +723,7 @@ function render() {
   renderCoverage(vs);
   renderPhase();
   renderVault(vs);
+  renderTutorial(vs);
   renderNpc(vs);
   renderRetry(vs);
   renderEndgame(vs);
@@ -686,7 +744,8 @@ document.querySelectorAll("#rule input").forEach((inp) => {
 });
 $("withended").checked = !!loadPrefs().withended;
 $("withended").onchange = () => { savePrefs({ withended: $("withended").checked }); renderPhase(); };
-for (const id of ["modmetric", "retrymode", "revmode", "nightmode"]) {
+$("tutseq").onchange = () => { savePrefs({ tutseq: $("tutseq").value }); renderTutorial(selectedVersions()); };
+for (const id of ["modmetric", "retrymode", "revmode", "nightmode", "vaultmetric"]) {
   const saved = loadPrefs()[id];
   if (saved && [...$(id).options].some((o) => o.value === saved)) $(id).value = saved;
   $(id).onchange = () => { savePrefs({ [id]: $(id).value }); render(); };
