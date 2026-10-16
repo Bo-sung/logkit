@@ -74,7 +74,7 @@ public static class InsightsPage
     <div class="legend" style="margin-top:8px"><span><i style="background:#c98500"></i>낮</span><span><i style="background:#3987e5"></i>밤</span></div>
     <div id="c-phase" class="chart"></div>
     <p class="sub" style="margin:6px 0 0">이탈 = 플레이어의 마지막 구간(그 뒤로 같은 세이브의 기록이 없음). 저장을 불러와 이어 했으면 이탈이 아닙니다. saveId가 없는 이전 로그는 세션이 끝난 구간을 이탈로 셉니다.
-      게임에 클리어가 없고 1~7일차가 고정 일차, 8일차부터 무한 모드입니다(무한 표시). 이탈 구간의 시간은 중간에 끊긴 값이라 기본으로 위 분포에서 뺍니다.</p>
+      게임에 클리어가 없고 1~6일차가 고정 일차, 7일차부터 파산할 때까지 무한 모드입니다(무한 표시). 이탈 구간의 시간은 중간에 끊긴 값이라 기본으로 위 분포에서 뺍니다.</p>
   </section>
 
   <div class="section">가설 통계</div>
@@ -243,7 +243,9 @@ const NEUTRAL = "#484f58";
 const RULE_DEFAULT = { pen: 8, exp: 11, spread: 1, rate: 1, heat: 2, grav: 1 };
 state.rule = Object.assign({}, RULE_DEFAULT, loadPrefs().rule || {});
 
-const dayLabel = (d) => d + "일차" + (d >= 8 ? "·무한" : "");
+// 무한 모드 시작 일차: 게임 DayManager의 고정 일차 목록(customerDays)이 1~6일차라 7일차부터다(Game / endless_started).
+const ENDLESS_FROM = 7;
+const dayLabel = (d) => d + "일차" + (d >= ENDLESS_FROM ? "·무한" : "");
 const part = (parts, name) => (parts && parts[name]) || 0;
 const stageName = (scene) => (state.data.stages.find((s) => s.scene === scene) || {}).name || scene;
 const stageVaultLabel = (scene) => {
