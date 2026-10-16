@@ -125,6 +125,7 @@ public static class Program
         app.MapGet("/dashboard", HandleDashboard);
         app.MapGet("/analytics", HandleAnalyticsPage);
         app.MapGet("/weapons", HandleWeaponsPage);
+        app.MapGet("/insights", HandleInsightsPage);
         app.MapPost("/api/logs", HandleUploadAsync);
         app.MapGet("/health", HandleHealth);
         app.MapGet("/api/months", HandleMonths);
@@ -135,6 +136,7 @@ public static class Program
         app.MapGet("/api/metrics", HandleMonthMetrics);
         app.MapGet("/api/analytics", HandleAnalytics);
         app.MapGet("/api/analytics/weapons", HandleWeaponAnalytics);
+        app.MapGet("/api/analytics/insights", HandleInsights);
         app.MapDelete("/api/sessions/{sessionId}", HandleDeleteSession);
         app.MapDelete("/api/months/{month}", HandleDeleteMonth);
         app.MapGet("/api/summary/{month}.csv", HandleSummary);
@@ -236,6 +238,31 @@ public static class Program
 
         bool skipEditor = string.Equals(excludeEditor, "true", StringComparison.OrdinalIgnoreCase);
         return Results.Json(analytics.BuildWeapons(month, skipEditor), _jsonOptions);
+    }
+
+    /// <summary>
+    /// GET /insights 처리기. 가설·일반 통계 페이지 HTML을 돌려준다.
+    /// 입력값은 없으며 200 상태와 text/html 본문을 반환한다.
+    /// </summary>
+    private static IResult HandleInsightsPage()
+    {
+        return Results.Content(InsightsPage.Html, "text/html; charset=utf-8");
+    }
+
+    /// <summary>
+    /// GET /api/analytics/insights 처리기. 일차·주문·습격 단위 세션 기록을 버전별로 모아 돌려준다.
+    /// month(yyyy-MM, 생략 시 전체 월)와 excludeEditor(true면 에디터 세션 제외)를 사용하며
+    /// month 형식이 틀리면 400, 그 외에는 200과 기록 JSON을 반환한다.
+    /// </summary>
+    private static IResult HandleInsights(string? month, string? excludeEditor, GameAnalytics analytics)
+    {
+        if (!string.IsNullOrEmpty(month) && !_monthPattern.IsMatch(month))
+        {
+            return Results.BadRequest(new { error = "month must be yyyy-MM" });
+        }
+
+        bool skipEditor = string.Equals(excludeEditor, "true", StringComparison.OrdinalIgnoreCase);
+        return Results.Json(analytics.BuildInsights(month, skipEditor), _jsonOptions);
     }
 
     /// <summary>

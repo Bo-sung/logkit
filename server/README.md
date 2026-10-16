@@ -62,6 +62,8 @@ dotnet run        # http://0.0.0.0:5000 에서 대기
 | `GET /api/analytics` | 필요 | 200 JSON | 같은 앱 버전의 모든 세션 로그를 합산한 누적 통계. `month`(yyyy-MM, 생략 시 전체 기간), `excludeEditor=true`(에디터 세션 제외). 형식이 틀리면 400 |
 | `GET /weapons` | 불필요 | 200 `text/html` | 버전별 총기 모딩 통계 페이지 |
 | `GET /api/analytics/weapons` | 필요 | 200 JSON | 작업대 퇴장·시험 사격 입력의 총기 코드를 해석해 버전별 구성(Configs) 합계로 돌려준다. 파라미터는 `/api/analytics`와 같다 |
+| `GET /insights` | 불필요 | 200 `text/html` | 가설·일반 통계 페이지 |
+| `GET /api/analytics/insights` | 필요 | 200 JSON | 세션별 일차·주문·습격 기록을 버전별로 돌려준다. 분포·비율은 화면이 계산한다. 파라미터는 `/api/analytics`와 같다 |
 
 인증은 `X-Api-Key` 헤더 하나다. 브라우저 다운로드 링크처럼 헤더를 붙일 수 없는 요청은 `?key=API키` 쿼리로 대신할 수 있다. `/health`와 `/dashboard` 페이지 자체는 예외고, 대시보드가 부르는 `/api` 호출은 전부 검사한다.
 
@@ -203,3 +205,9 @@ category와 message로 식별하고 data_json 필드를 읽는다. 규칙은 `ar
 - HTTP 평문 통신이다. 외부 공개 서버라면 리버스 프록시 + HTTPS 구성과 키 관리를 강화한다. `?key=` 쿼리는 서버 접근 로그에 남을 수 있으니 가능하면 헤더 인증을 쓴다.
 - 수신 로그의 스택트레이스에 클라이언트 PC의 사용자명이 포함될 수 있다.
 - 대시보드와 API에 로그 수정 기능은 없다. 삭제는 세션 단위·월 단위만 지원한다.
+
+## 가설·일반 통계 (/insights)
+
+`http://localhost:5000/insights`는 개선안 검증용 차트를 버전별로 비교한다. 플레이어 단위는 세션, 일차는 상점 이벤트의 `day`, 습격은 직전 일차의 밤이다.
+습격 총은 `습격 시작`의 코드, 없으면 그 습격에서 가장 많이 쏜 구성(같은 세션에서 코드를 본 것)이다. 금고 관통 내성은 로그·스테이지 표에 없어 스테이지별로 보여 주고,
+튜토리얼 퍼널은 단계 기록이 없어 필요한 로그만 안내한다. 손님 이름표(`Insights.cs` `CustomerNames`)는 게임 `CustomerOrderData.json` 기준이다.

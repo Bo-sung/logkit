@@ -26,6 +26,8 @@ internal static class GameEvents
     public const string WorkbenchEnter = "workbench_entered";
     public const string WorkbenchExit = "workbench_exited";   // weaponCode, weaponCodeStatus
     public const string AttackInput = "attack_input";         // weaponCode, weaponCodeStatus (발사 입력, 발사 성공 아님)
+    public const string OrderCreated = "order_created";       // profileId, requestIds
+    public const string OrderRestored = "order_restored";     // profileId, requestIds (저장 불러오기로 되살린 주문)
     public const string OrderCompleted = "order_completed";   // success, customerDead
     public const string WeaponFired = "weapon_fired";         // time, position, weaponAssemblyId (Shop: 공방 주간, NightRaid: 습격 중)
     public const string RaidWeaponConfig = "raid_weapon_config"; // time, weaponCode, weaponAssemblyId — 습격 중 처음 쓰는 구성
@@ -107,6 +109,51 @@ public sealed class GameAnalytics
             Versions = versions.Select(v => AggregateWeapons(v, byVersion[v], bounds)).ToList(),
         };
     }
+
+    /// <summary>
+    /// 범위 안 세션의 가설·일반 통계 기록을 버전별로 모은다. 집계(분포·비율)는 화면이 한다.
+    /// month(yyyy-MM, 비면 전체 월)와 excludeEditor를 사용하며, 버전 오름차순 기록 응답을 반환한다.
+    /// </summary>
+    public InsightsResponse BuildInsights(string? month, bool excludeEditor)
+    {
+        Dictionary<string, List<(SessionRow Row, SessionDigest Digest)>> byVersion = GroupByVersion(month, excludeEditor);
+        List<string> versions = byVersion.Keys.ToList();
+        versions.Sort(CompareVersions);
+
+        InsightsResponse response = new()
+        {
+            Month = month ?? string.Empty,
+            ExcludeEditor = excludeEditor,
+            Stages = RaidStages.Select(p => new InsightStage { Scene = p.Scene, Name = p.Name }).ToList(),
+        };
+        foreach (string version in versions)
+        {
+            List<(SessionRow Row, SessionDigest Digest)> sessions = byVersion[version];
+            sessions.Sort((a, b) => string.CompareOrdinal(a.Row.DateUtc, b.Row.DateUtc));
+            InsightVersion v = new() { Version = version, Sessions = sessions.Count };
+            for (int s = 0; s < sessions.Count; s++)
+            {
+                InsightDigest digest = sessions[s].Digest.Insights;
+                v.Days.AddRange(digest.Days.Select(x => x.ForSession(s)));
+                v.Orders.AddRange(digest.Orders.Select(x => x.ForSession(s)));
+                v.Raids.AddRange(digest.Raids.Select(x => x.ForSession(s)));
+            }
+
+            response.Versions.Add(v);
+        }
+
+        return response;
+    }
+
+    /// <summary>습격 스테이지 표. 게임 Assets/Resources/RaidMapData.json의 regions 순서(입장 비용 오름차순)와 표시 이름이다.</summary>
+    private static readonly (string Scene, string Name)[] RaidStages =
+    {
+        ("Tutorial_WoodenHouse", "튜토리얼 목조주택"),
+        ("NightRaid_WoodenHouse", "목조주택"),
+        ("NightRaid_BankGrand", "은행"),
+        ("NightRaid_Millitary_base", "군사기지"),
+        ("NightRaid_JungleCampus", "정글 캠퍼스"),
+    };
 
     /// <summary>범위 안 세션을 요약(digest)과 함께 앱 버전별로 묶는다. CSV가 없는 세션은 뺀다.</summary>
     private Dictionary<string, List<(SessionRow Row, SessionDigest Digest)>> GroupByVersion(string? month, bool excludeEditor)
@@ -195,6 +242,7 @@ public sealed class GameAnalytics
 
         SessionDigest d = new();
         WeaponTracker weapons = new(d.Weapons);
+        InsightTracker insights = new(d.Insights);
         (DateTime At, string Scene)? openWorkbench = null;
         RaidDigest? raid = null;
 
@@ -226,13 +274,14 @@ public sealed class GameAnalytics
             string name = entry.Message.Trim();
             if (Is(entry.Category, GameEvents.ShopCategory))
             {
+                JsonElement shop = ParseData(entry.DataJson);
+                insights.Shop(at, name, shop);
                 switch (name)
                 {
                     case GameEvents.Sale:
                     case GameEvents.LegacySale:
-                        JsonElement sale = ParseData(entry.DataJson);
-                        AddSale(d, sale);
-                        weapons.Sale(sale);
+                        AddSale(d, shop);
+                        weapons.Sale(shop);
                         break;
 
                     case GameEvents.WorkbenchEnter:
@@ -241,19 +290,19 @@ public sealed class GameAnalytics
 
                     case GameEvents.WorkbenchExit:
                         ExitWorkbench(at, entry.Scene);
-                        weapons.WorkbenchExit(ParseData(entry.DataJson));
+                        weapons.WorkbenchExit(shop);
                         break;
 
                     case GameEvents.AttackInput:
-                        weapons.AttackInput(ParseData(entry.DataJson));
+                        weapons.AttackInput(shop);
                         break;
 
                     case GameEvents.WeaponFired:
-                        weapons.ShopShot(ParseData(entry.DataJson));
+                        weapons.ShopShot(shop);
                         break;
 
                     case GameEvents.OrderCompleted:
-                        JsonElement order = ParseData(entry.DataJson);
+                        JsonElement order = shop;
                         d.OrdersCompleted++;
                         d.OrdersSucceeded += TryGet(order, "success", out JsonElement success) && success.ValueKind == JsonValueKind.True ? 1 : 0;
                         d.CustomerDeaths += TryGet(order, "customerDead", out JsonElement dead) && dead.ValueKind == JsonValueKind.True ? 1 : 0;
@@ -278,11 +327,16 @@ public sealed class GameAnalytics
                 {
                     raid = new RaidDigest { HasStart = true, Scene = ReadString(data, "scene") };
                     d.Raids.Add(raid);
+                    insights.RaidStart(raid.Scene, data);
                 }
-                else if (raid == null)
+                else
                 {
-                    raid = new RaidDigest();
-                    d.Raids.Add(raid);
+                    insights.RaidEvent(entry.Scene, name, data);
+                    if (raid == null)
+                    {
+                        raid = new RaidDigest();
+                        d.Raids.Add(raid);
+                    }
                 }
 
                 if (raid.Scene.Length == 0 && name != GameEvents.RaidStart)
@@ -303,6 +357,7 @@ public sealed class GameAnalytics
                     raid.ModuleCrateCredits = ReadDouble(data, "moduleCrateCredits");
                     raid.MaterialCrateCredits = ReadDouble(data, "materialCrateCredits");
                     raid.ModuleRewards.AddRange(ReadStrings(data, "moduleCrateRewards"));
+                    insights.RaidEnd(data);
                     raid = null;
                 }
             }
@@ -313,6 +368,7 @@ public sealed class GameAnalytics
             d.UnmatchedWorkbench++;
         }
 
+        insights.Finish(d.Weapons);
         foreach (RaidDigest r in d.Raids)
         {
             if (r.Scene.Length == 0)
@@ -949,6 +1005,7 @@ internal sealed class SessionDigest
     public int UnmatchedWorkbench;
     public readonly List<RaidDigest> Raids = new();
     public readonly WeaponDigest Weapons = new();
+    public readonly InsightDigest Insights = new();
 }
 
 /// <summary>한 세션의 총기 기록 요약. Configs는 구성 Key별 합계다(Sessions 필드는 버전 합산 때 채운다).</summary>

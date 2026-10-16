@@ -104,6 +104,8 @@ dotnet run            # http://0.0.0.0:5000 에서 대기, 데이터는 server/d
 | `GET /api/analytics?month=` | 필요 | 같은 앱 버전의 모든 세션 로그를 합산한 누적 통계(`month` 생략 시 전체 기간, `excludeEditor=true`) |
 | `GET /weapons` | 불필요 | 버전별 총기 모딩 통계 페이지 |
 | `GET /api/analytics/weapons?month=` | 필요 | 총기 코드를 해석한 버전별 구성 합계(파츠 사용량·조합 계산용) |
+| `GET /insights` | 불필요 | 가설·일반 통계 페이지(일차별 수익·재도전·종결 총기 등) |
+| `GET /api/analytics/insights?month=` | 필요 | 세션별 일차·주문·습격 기록(가설 통계 계산용) |
 | `GET /api/months` | 필요 | 월 목록 + 월별 집계 |
 | `GET /api/sessions?month=` | 필요 | 세션 목록(`q`, `onlyIssues`, `sort`) |
 | `GET /api/sessions/{id}` | 필요 | 세션 상세(`levels`, `category`, `scene`, `q`, `offset`, `limit`) |

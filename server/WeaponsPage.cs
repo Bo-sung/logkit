@@ -30,6 +30,7 @@ public static class WeaponsPage
 <header>
   <div class="brand">LOGKIT<span>WEAPON STATS</span></div>
   <a href="/analytics">버전 통계 →</a>
+  <a href="/insights">가설 통계 →</a>
   <a href="/dashboard">GM 툴(세션별 로그) →</a>
   <div id="status" class="status"></div>
   <span class="spacer"></span>

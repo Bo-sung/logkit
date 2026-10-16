@@ -1,0 +1,508 @@
+using System.Text.Json;
+
+namespace LogServer;
+
+/// <summary>
+/// 가설·일반 통계(/insights)용 세션 기록 수집기. 세션 하나를 시간순으로 훑으며 일차·주문·습격 단위 기록을 만든다.
+/// 일차는 Shop 이벤트의 day 필드로 정하고, 습격은 시작 직전에 본 일차의 밤으로 본다. day가 없는 초기 빌드 로그는 일차 기록에서 빠진다.
+/// 주문의 수정 횟수는 같은 orderId의 작업대 퇴장 중 구성이 바뀐 횟수(WeaponTracker의 빌드와 같은 규칙)다.
+/// </summary>
+internal sealed class InsightTracker
+{
+    private readonly InsightDigest _digest;
+    private readonly Dictionary<string, WeaponLayout?> _decoded = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, InsightOrder> _orders = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, string> _lastBuildByOrder = new(StringComparer.Ordinal);
+    private readonly Dictionary<int, InsightDay> _days = new();
+    private (DateTime At, string Order)? _openWorkbench;
+    private InsightRaid? _raid;
+    private Dictionary<string, double> _spotted = new(StringComparer.Ordinal);
+    private List<double> _responses = new();
+    private int? _day;
+
+    public InsightTracker(InsightDigest digest)
+    {
+        _digest = digest;
+    }
+
+    /// <summary>Shop 이벤트 하나. 모든 이벤트의 day로 현재 일차를 갱신한다.</summary>
+    public void Shop(DateTime at, string name, JsonElement data)
+    {
+        if (Number(data, "day") is double day && day >= 0 && day < 1000)
+        {
+            _day = (int)day;
+        }
+
+        string orderId = Text(data, "orderId");
+        switch (name)
+        {
+            case GameEvents.OrderCreated:
+            case GameEvents.OrderRestored:
+                Order(orderId)?.SetNpc(Text(data, "profileId"));
+                break;
+
+            case GameEvents.WorkbenchEnter:
+                _openWorkbench = orderId.Length > 0 ? (at, orderId) : null;
+                break;
+
+            case GameEvents.WorkbenchExit:
+                InsightOrder? order = Order(orderId);
+                if (order != null && _openWorkbench is { } open && open.Order == orderId && at >= open.At)
+                {
+                    order.WorkbenchSeconds = (order.WorkbenchSeconds ?? 0) + (at - open.At).TotalSeconds;
+                }
+
+                _openWorkbench = null;
+                if (Layout(data) is not { } layout)
+                {
+                    break;
+                }
+
+                if (_lastBuildByOrder.TryGetValue(orderId, out string? previous) && previous == layout.Key)
+                {
+                    break;
+                }
+
+                _lastBuildByOrder[orderId] = layout.Key;
+                if (order != null)
+                {
+                    order.Builds++;
+                    order.BuildsAfterTest += order.Tests > 0 ? 1 : 0;
+                }
+
+                if (Today() is { } today)
+                {
+                    today.Builds.Add(layout.PartCounts());
+                }
+
+                break;
+
+            case GameEvents.AttackInput:
+                if (Order(orderId) is { } tested)
+                {
+                    tested.Tests++;
+                }
+
+                break;
+
+            case GameEvents.Sale:
+            case GameEvents.LegacySale:
+                double? price = Number(data, "price");
+                bool? satisfied = Bool(data, "satisfied");
+                if (Order(orderId) is { } sold)
+                {
+                    sold.Sold = true;
+                    sold.Price = price;
+                    sold.Satisfied = satisfied;
+                }
+
+                if (Today() is { } saleDay)
+                {
+                    saleDay.Sales++;
+                    saleDay.SalesSum += price ?? 0;
+                    saleDay.Priced += price.HasValue ? 1 : 0;
+                    saleDay.Satisfied += satisfied == true ? 1 : 0;
+                }
+
+                break;
+        }
+    }
+
+    /// <summary>습격 시작. 휴대 총 코드가 있으면 그 파츠를 습격 총으로 둔다.</summary>
+    public void RaidStart(string scene, JsonElement data)
+    {
+        FinishRaid();
+        _raid = new InsightRaid { Day = _day, Stage = scene };
+        _digest.Raids.Add(_raid);
+        if (Layout(data) is { } loadout)
+        {
+            _raid.Parts = loadout.PartCounts();
+            _raid.Gun = "loadout";
+        }
+    }
+
+    /// <summary>습격 구간 안의 이벤트. 시작 없이 온 이벤트는 새 구간을 연다(GameAnalytics와 같은 규칙).</summary>
+    public void RaidEvent(string scene, string name, JsonElement data)
+    {
+        if (_raid == null)
+        {
+            _raid = new InsightRaid { Day = _day, Stage = scene };
+            _digest.Raids.Add(_raid);
+        }
+
+        if (_raid.Stage.Length == 0)
+        {
+            _raid.Stage = scene;
+        }
+
+        string enemy = Text(data, "enemyId");
+        double? time = Number(data, "time");
+        switch (name)
+        {
+            case GameEvents.EnemySpotted:
+                if (enemy.Length > 0 && time is double spottedAt)
+                {
+                    _spotted.TryAdd(enemy, spottedAt);
+                }
+
+                break;
+
+            case GameEvents.EnemyKilled:
+                if (enemy.Length > 0 && time is double killedAt && _spotted.Remove(enemy, out double seenAt) && killedAt >= seenAt)
+                {
+                    _responses.Add(killedAt - seenAt);
+                }
+
+                break;
+
+            case GameEvents.WeaponFired:
+                string key = Text(data, "weaponAssemblyIdStatus") is "" or "ok" ? Text(data, "weaponAssemblyId") : string.Empty;
+                if (key.Length > 0)
+                {
+                    _raid.Shots.TryGetValue(key, out int shots);
+                    _raid.Shots[key] = shots + 1;
+                }
+
+                break;
+        }
+    }
+
+    /// <summary>습격 종료 이벤트. 성공 여부와 보상 크레딧을 적고 구간을 닫는다.</summary>
+    public void RaidEnd(JsonElement data)
+    {
+        if (_raid == null)
+        {
+            return;
+        }
+
+        _raid.Survived = Bool(data, "survived");
+        double? module = Number(data, "moduleCrateCredits"), material = Number(data, "materialCrateCredits");
+        _raid.Credits = module.HasValue || material.HasValue ? (module ?? 0) + (material ?? 0) : null;
+        FinishRaid();
+    }
+
+    /// <summary>
+    /// 세션 끝 정리. 휴대 총 코드가 없는 습격은 그 습격에서 가장 많이 쏜 구성 중 이 세션에서 코드를 본 것을 습격 총으로 쓰고,
+    /// 실패한 습격마다 이후 다른 습격이 있었는지(재도전)를 적는다.
+    /// </summary>
+    public void Finish(WeaponDigest weapons)
+    {
+        FinishRaid();
+        foreach (InsightRaid raid in _digest.Raids)
+        {
+            if (raid.Stage.Length == 0)
+            {
+                raid.Stage = "(미기록)";
+            }
+
+            if (raid.Parts != null)
+            {
+                continue;
+            }
+
+            foreach ((string key, _) in raid.Shots.OrderByDescending(p => p.Value))
+            {
+                if (weapons.Configs.TryGetValue(key, out WeaponConfig? config) && config.Known)
+                {
+                    raid.Parts = new Dictionary<string, int>(config.Parts, StringComparer.Ordinal);
+                    raid.Gun = "fired";
+                    break;
+                }
+            }
+        }
+
+        for (int i = 0; i < _digest.Raids.Count; i++)
+        {
+            InsightRaid raid = _digest.Raids[i];
+            if (raid.Survived != false)
+            {
+                continue;
+            }
+
+            List<InsightRaid> later = _digest.Raids.Skip(i + 1).ToList();
+            raid.Retried = later.Count > 0;
+            raid.RetriedSameStage = later.Any(r => r.Stage == raid.Stage);
+        }
+
+        _digest.Orders.AddRange(_orders.Values.Where(o => o.Day != null));
+        _digest.Days.AddRange(_days.OrderBy(p => p.Key).Select(p => p.Value));
+    }
+
+    private void FinishRaid()
+    {
+        if (_raid != null && _responses.Count > 0)
+        {
+            _raid.ResponseMean = _responses.Average();
+            _raid.ResponseCount = _responses.Count;
+        }
+
+        _raid = null;
+        _spotted = new Dictionary<string, double>(StringComparer.Ordinal);
+        _responses = new List<double>();
+    }
+
+    private InsightDay? Today()
+    {
+        if (_day is not int day)
+        {
+            return null;
+        }
+
+        if (!_days.TryGetValue(day, out InsightDay? record))
+        {
+            record = new InsightDay { Day = day };
+            _days[day] = record;
+        }
+
+        return record;
+    }
+
+    /// <summary>주문 기록을 꺼내거나 만든다. 일차는 처음 본 이벤트의 일차다. orderId가 비면 null.</summary>
+    private InsightOrder? Order(string orderId)
+    {
+        if (orderId.Length == 0)
+        {
+            return null;
+        }
+
+        if (!_orders.TryGetValue(orderId, out InsightOrder? order))
+        {
+            order = new InsightOrder { Day = _day };
+            _orders[orderId] = order;
+        }
+
+        order.Day ??= _day;
+        return order;
+    }
+
+    private WeaponLayout? Layout(JsonElement data)
+    {
+        string code = Text(data, "weaponCode");
+        string status = Text(data, "weaponCodeStatus");
+        if (code.Length == 0 || status.Length > 0 && status != "ok")
+        {
+            return null;
+        }
+
+        if (!_decoded.TryGetValue(code, out WeaponLayout? layout))
+        {
+            layout = WeaponCode.TryDecode(code);
+            _decoded[code] = layout;
+        }
+
+        return layout;
+    }
+
+    private static string Text(JsonElement data, string name) =>
+        data.ValueKind == JsonValueKind.Object && data.TryGetProperty(name, out JsonElement value) && value.ValueKind == JsonValueKind.String
+            ? value.GetString()?.Trim() ?? string.Empty
+            : string.Empty;
+
+    private static double? Number(JsonElement data, string name) =>
+        data.ValueKind == JsonValueKind.Object && data.TryGetProperty(name, out JsonElement value)
+        && value.ValueKind == JsonValueKind.Number && value.TryGetDouble(out double number) && double.IsFinite(number)
+            ? number
+            : null;
+
+    private static bool? Bool(JsonElement data, string name) =>
+        data.ValueKind == JsonValueKind.Object && data.TryGetProperty(name, out JsonElement value)
+        && value.ValueKind is JsonValueKind.True or JsonValueKind.False
+            ? value.ValueKind == JsonValueKind.True
+            : null;
+}
+
+/// <summary>한 세션의 가설·일반 통계 기록.</summary>
+internal sealed class InsightDigest
+{
+    public readonly List<InsightDay> Days = new();
+    public readonly List<InsightOrder> Orders = new();
+    public readonly List<InsightRaid> Raids = new();
+}
+
+/// <summary>
+/// 손님 프로필 ID(CustomerProfile.profileId = 손님 에셋 GUID) → 에셋 이름.
+/// 게임 저장소 Assets/Resources/CustomerOrderData.json의 guests(id, name) 기준이다. 없는 ID는 앞 8자리로 표시한다.
+/// </summary>
+internal static class CustomerNames
+{
+    private static readonly Dictionary<string, string> _names = new(StringComparer.OrdinalIgnoreCase)
+    {
+        ["a5308f1435d603f46aea8a8ee70cd591"] = "D0_1_TutorialCustomer",
+        ["f6afb57651235a649a138ba28b86b8b3"] = "D0_2_Extension",
+        ["8e45417c50eb84d45bc816c2ce4aba9a"] = "D0_2_ModuleCustomer",
+        ["e3726adb0bb965747ae2a14bdd32852b"] = "D0_3_SplitTwo",
+        ["c2e5e67315c2e684bb468481f9a2bc5b"] = "D0_3_TagCustomer",
+        ["6f6cf35ea746e344a93b1587938c685b"] = "D0_4_DifficultCustomer",
+        ["1353401e1a4304d4d9e377490fe26882"] = "D0_4_MoreMuzzles",
+        ["8df14042c9325de4e9e896078ddebfc2"] = "D0_5_Combo",
+        ["25b5381ef8e155343bbafe08fae3af6d"] = "D1_1_BaseCore",
+        ["f350a20ea1c6a314b9a2ebfd39e192be"] = "D1_2_Extension",
+        ["a660428af7905aa49a0c3400753fd0ae"] = "D1_3_SplitTwo",
+        ["19eb28f21e576bd40bdd9363439fb11a"] = "D1_4_MoreMuzzles",
+        ["30f765269e0d71446a935b0c88492228"] = "D1_5_Combo",
+        ["a00ebe5381d81494ba1d532eaa55a166"] = "D2_1_Shotgun",
+        ["d5398f48369de9044b8afcc0e73edc0d"] = "D2_2_Sniper",
+        ["54d26364e40dd1b489519863487c0c76"] = "D2_3_Rifle",
+        ["d29f7a9b9e4256f449ba2276cf0fa0e4"] = "D2_4_Pistol",
+        ["a56c9fc6df6bc184ebb69d9092b8562e"] = "D2_5_BigMac",
+        ["a657c8e6daaac0640b26135bf3b0e940"] = "D2_6_Grenade",
+        ["e8726eef5e281a241935acf0d3110b60"] = "D2_7_Ricochet 1",
+        ["6a41b8901ebccb14a9bea905b5e759ab"] = "D2_7_Ricochet",
+        ["2ba099eab2272d940ae22970ff7731f3"] = "D3_1_DoubleBarrelAR",
+        ["d8d88852c4557604ebef499f6d5ceda1"] = "D3_2_QuadShotgun",
+        ["e09ace2d9e03a6d4b9c5163bfb793a27"] = "D3_3_Mom",
+        ["e58d71f88d4f876438bf7acace814a9b"] = "D3_4_Sommelier",
+        ["f2b056418a5de7349942f08879971a6f"] = "D3_5_LakePark",
+        ["2d9480eb51c562c4c92a1421ea5770da"] = "D3_6_Charge",
+        ["1117dd03e64b32a43b93b4a15b89a4c2"] = "D3_7_Gravity",
+        ["0c575dbccf9fbcb40a50aa5bf6e458fb"] = "D3_8_Flamer",
+        ["038a4f4f9f79c204a9087f7ce969d7f5"] = "D3_9_christ",
+        ["d22429fd957afa44483eb23d1c989306"] = "D4_1_HangarCQC",
+        ["caed71048059fb84ea75dbd3fa5def6d"] = "D4_2_PolitePistol",
+        ["f88c397ed1f539f4a961604044e93feb"] = "D4_3_Robber",
+        ["fd770da102b6f294191f246f9ca975f5"] = "D4_4_Professional",
+        ["d388b03377bb04d4097c8992aa687d9e"] = "D4_5_RipAndTear",
+        ["d5629a5fb5df7874ebefe9e24bd959af"] = "D4_6_Rotation",
+        ["89a6e2464d2d3824c92a161cb4ac7990"] = "D4_7_WaterGun",
+        ["2d9afc0f00161344c98c8238201fb8ca"] = "D4_8_Homing",
+        ["8ca54d168454a8a4bbf7e11f5964cca1"] = "D4_9_Snaiper",
+        ["f4e6e6c50ca7d574f8fe2e7cd530a4f6"] = "D5_1_Jjajang",
+        ["5867799c1021bd247bdc32c3246d757f"] = "D5_10_jumpBomb",
+        ["bb35f40bd3aa17e4f831ca8946978d4b"] = "D5_11_RicsMonkey",
+        ["1cd9be92bac19b246923e91f6cf077e7"] = "D5_2_Persona",
+        ["3fe84f1ef3ba7c645b20fad83564cada"] = "D5_3_Student",
+        ["a0a2b26fb940de64c88d341032fefb96"] = "D5_4_ShotgunCeption",
+        ["9f6cc4a608cdb4e4bbe4dcd2b1d6167d"] = "D5_5_RealGun",
+        ["0a8af4ee73848804a9693aa05665fb80"] = "D5_6_FlameTornado",
+        ["346ffc96cc977c64a8a3730e146a6ad0"] = "D5_7_HomingBlast",
+        ["c2bdd0ee67e738841a3edca181024144"] = "D5_8_BlackHole",
+        ["52c56089bff6c5341966c99523742ef5"] = "D5_9_Firefighter",
+        ["d5a59221e412b7b4bb5188f1953c12d2"] = "D6_1_BankShot",
+        ["949c287f545cef84eb20c1f31f8eba01"] = "D6_2_Railgun",
+        ["0c5e735d8c860654eb79844236b27b63"] = "D6_3_HomingShotgun",
+        ["8f30edea593b9824c88aaa4606b9c50b"] = "D6_4_GrandpaAgain",
+        ["c13e2f3309d85a942a71852dc0edb95d"] = "D6_5_Minigun",
+        ["64bbf60094050bb4492d018a6e417617"] = "D6_6_Everything",
+        ["4dbebd0100c6bc24db1270af6d2e8600"] = "D6_7_RobberAgain",
+        ["78f7371a5c003d44393acb6a85257afb"] = "D6_8_Bbotto",
+    };
+
+    public static string Name(string profileId) =>
+        profileId.Length == 0 ? string.Empty
+        : _names.TryGetValue(profileId, out string? name) ? name
+        : "손님 " + profileId[..Math.Min(8, profileId.Length)];
+}
+
+/// <summary>GET /api/analytics/insights 응답 본문. 버전별 세션 기록 목록이며 화면이 분포·비율을 계산한다.</summary>
+public sealed class InsightsResponse
+{
+    /// <summary>조회한 월(yyyy-MM). 빈 문자열이면 전체 월.</summary>
+    public string Month { get; set; } = string.Empty;
+
+    /// <summary>에디터 세션을 제외했으면 true.</summary>
+    public bool ExcludeEditor { get; set; }
+
+    /// <summary>습격 스테이지 표(게임 RaidMapData 순서). 씬 이름 → 표시 이름.</summary>
+    public List<InsightStage> Stages { get; set; } = new();
+
+    /// <summary>버전 오름차순 기록 목록.</summary>
+    public List<InsightVersion> Versions { get; set; } = new();
+}
+
+/// <summary>습격 스테이지 하나. 순서는 게임 스테이지 표(입장 비용 오름차순)와 같다.</summary>
+public sealed class InsightStage
+{
+    public string Scene { get; set; } = string.Empty;
+    public string Name { get; set; } = string.Empty;
+}
+
+/// <summary>버전 하나의 기록. 각 기록의 S는 이 버전 안의 세션 번호(0부터)이며 플레이어 단위로 쓴다.</summary>
+public sealed class InsightVersion
+{
+    public string Version { get; set; } = string.Empty;
+    public int Sessions { get; set; }
+    public List<InsightDay> Days { get; set; } = new();
+    public List<InsightOrder> Orders { get; set; } = new();
+    public List<InsightRaid> Raids { get; set; } = new();
+}
+
+/// <summary>플레이어(세션) 하루의 상점 기록. Builds는 그날 작업대 퇴장 때 구성이 바뀐 총마다 파츠 이름별 개수다.</summary>
+public sealed class InsightDay
+{
+    public int S { get; set; }
+    public int Day { get; set; }
+    public int Sales { get; set; }
+    public double SalesSum { get; set; }
+    public int Priced { get; set; }
+    public int Satisfied { get; set; }
+    public List<Dictionary<string, int>> Builds { get; set; } = new();
+
+    /// <summary>세션 번호를 붙인 얕은 복사본. 캐시된 세션 기록은 바꾸지 않는다.</summary>
+    internal InsightDay ForSession(int s)
+    {
+        InsightDay copy = (InsightDay)MemberwiseClone();
+        copy.S = s;
+        return copy;
+    }
+}
+
+/// <summary>주문 하나. Builds는 수정 횟수(구성이 바뀐 작업대 퇴장), BuildsAfterTest는 그중 첫 시험 사격 입력 뒤의 횟수다.</summary>
+public sealed class InsightOrder
+{
+    public int S { get; set; }
+    public int? Day { get; set; }
+    public string Npc { get; set; } = string.Empty;
+    public int Builds { get; set; }
+    public int BuildsAfterTest { get; set; }
+    public int Tests { get; set; }
+    public double? WorkbenchSeconds { get; set; }
+    public bool Sold { get; set; }
+    public double? Price { get; set; }
+    public bool? Satisfied { get; set; }
+
+    /// <summary>세션 번호를 붙인 얕은 복사본. 캐시된 세션 기록은 바꾸지 않는다.</summary>
+    internal InsightOrder ForSession(int s)
+    {
+        InsightOrder copy = (InsightOrder)MemberwiseClone();
+        copy.S = s;
+        return copy;
+    }
+
+    internal void SetNpc(string profileId)
+    {
+        if (profileId.Length > 0)
+        {
+            Npc = CustomerNames.Name(profileId);
+        }
+    }
+}
+
+/// <summary>
+/// 습격 하나. Parts는 습격 총의 파츠 이름별 개수(Gun = loadout: 습격 시작 코드, fired: 가장 많이 쏜 구성, 없으면 null)다.
+/// ResponseMean은 적 발견→처치 시간(게임 초)의 평균이고, Retried는 실패 뒤 같은 세션에서 다시 습격했는지다.
+/// </summary>
+public sealed class InsightRaid
+{
+    public int S { get; set; }
+    public int? Day { get; set; }
+    public string Stage { get; set; } = string.Empty;
+    public bool? Survived { get; set; }
+    public double? Credits { get; set; }
+    public string Gun { get; set; } = string.Empty;
+    public Dictionary<string, int>? Parts { get; set; }
+    public double? ResponseMean { get; set; }
+    public int ResponseCount { get; set; }
+    public bool? Retried { get; set; }
+    public bool? RetriedSameStage { get; set; }
+
+    /// <summary>세션 번호를 붙인 얕은 복사본. 캐시된 세션 기록은 바꾸지 않는다.</summary>
+    internal InsightRaid ForSession(int s)
+    {
+        InsightRaid copy = (InsightRaid)MemberwiseClone();
+        copy.S = s;
+        return copy;
+    }
+
+    [System.Text.Json.Serialization.JsonIgnore]
+    internal Dictionary<string, int> Shots { get; } = new(StringComparer.Ordinal);
+}

@@ -39,7 +39,7 @@ public static class WeaponCode
         ["d402a84ed473853498b702ccf20adc69"] = "관통",
         ["8185707d079aa3d4eba1d33833009eb2"] = "반사",
         ["cc30a6f07cbd432428e9db5a6f3315ae"] = "스코프",
-        ["ac721da9683bfcc46b24fdba51a5b278"] = "산탄",
+        ["ac721da9683bfcc46b24fdba51a5b278"] = "방사",
         ["d5834196fd7a14146bee8605f3766655"] = "가속",
         ["9841ca931bf7a8c4b866da354b808ad7"] = "회전",
         ["4793f8d918e54829be0e1db07dc07830"] = "4방향 분할",
