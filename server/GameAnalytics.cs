@@ -32,6 +32,9 @@ internal static class GameEvents
     public const string WeaponFired = "weapon_fired";         // time, position, weaponAssemblyId (Shop: 공방 주간, NightRaid: 습격 중)
     public const string RaidWeaponConfig = "raid_weapon_config"; // time, weaponCode, weaponAssemblyId — 습격 중 처음 쓰는 구성
 
+    public const string GameCategory = "Game";
+    public const string Pause = "일시정지";                   // 일시정지 해제 또는 다음 이벤트까지를 정지 시간으로 본다
+
     public const string RaidStart = "습격 시작";              // scene, weaponCode, weaponAssemblyId (휴대 총은 이후 빌드부터)
     public const string PlayerState = "플레이어 상태";        // time, position{x,y,z}, cameraRotation, health, remainingModuleCrates, remainingMaterialCrates, tanks, helicopters
     public const string BlockDestroyed = "블록 파괴";         // stageId, time, blockId
@@ -137,6 +140,8 @@ public sealed class GameAnalytics
                 v.Days.AddRange(digest.Days.Select(x => x.ForSession(s)));
                 v.Orders.AddRange(digest.Orders.Select(x => x.ForSession(s)));
                 v.Raids.AddRange(digest.Raids.Select(x => x.ForSession(s)));
+                bool clean = sessions[s].Row.EndedCleanly;
+                v.Phases.AddRange(digest.Phases.Select(x => x.ForSession(s, clean)));
             }
 
             response.Versions.Add(v);
@@ -272,6 +277,7 @@ public sealed class GameAnalytics
         foreach ((DateTime at, _, LogEntry entry) in ordered)
         {
             string name = entry.Message.Trim();
+            insights.Observe(at, entry.Category, name);
             if (Is(entry.Category, GameEvents.ShopCategory))
             {
                 JsonElement shop = ParseData(entry.DataJson);
@@ -327,7 +333,7 @@ public sealed class GameAnalytics
                 {
                     raid = new RaidDigest { HasStart = true, Scene = ReadString(data, "scene") };
                     d.Raids.Add(raid);
-                    insights.RaidStart(raid.Scene, data);
+                    insights.RaidStart(at, raid.Scene, data);
                 }
                 else
                 {
@@ -357,7 +363,7 @@ public sealed class GameAnalytics
                     raid.ModuleCrateCredits = ReadDouble(data, "moduleCrateCredits");
                     raid.MaterialCrateCredits = ReadDouble(data, "materialCrateCredits");
                     raid.ModuleRewards.AddRange(ReadStrings(data, "moduleCrateRewards"));
-                    insights.RaidEnd(data);
+                    insights.RaidEnd(at, data);
                     raid = null;
                 }
             }

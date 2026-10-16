@@ -6,6 +6,8 @@ namespace LogServer;
 /// 가설·일반 통계(/insights)용 세션 기록 수집기. 세션 하나를 시간순으로 훑으며 일차·주문·습격 단위 기록을 만든다.
 /// 일차는 Shop 이벤트의 day 필드로 정하고, 습격은 시작 직전에 본 일차의 밤으로 본다. day가 없는 초기 빌드 로그는 일차 기록에서 빠진다.
 /// 주문의 수정 횟수는 같은 orderId의 작업대 퇴장 중 구성이 바뀐 횟수(WeaponTracker의 빌드와 같은 규칙)다.
+/// 낮·밤 구간: n일차 낮은 day=n인 첫 상점 이벤트부터 그날 첫 습격 시작까지, 밤은 그 습격 시작부터 다른 day의 첫 상점 이벤트까지다.
+/// 구간 시간은 실제 시각 차에서 일시정지(다음 이벤트까지)를 뺀 값이며, 세션의 마지막 구간은 Ended(이탈 구간)로 표시한다.
 /// </summary>
 internal sealed class InsightTracker
 {
@@ -19,18 +21,46 @@ internal sealed class InsightTracker
     private Dictionary<string, double> _spotted = new(StringComparer.Ordinal);
     private List<double> _responses = new();
     private int? _day;
+    private InsightPhase? _phase;
+    private DateTime _phaseStart;
+    private double _phasePaused;
+    private DateTime? _pauseStart;
+    private DateTime? _raidStart;
+    private DateTime _lastAt;
 
     public InsightTracker(InsightDigest digest)
     {
         _digest = digest;
     }
 
-    /// <summary>Shop 이벤트 하나. 모든 이벤트의 day로 현재 일차를 갱신한다.</summary>
+    /// <summary>모든 행에서 먼저 부른다. 열린 일시정지를 이 행 시각에서 닫고, 일시정지 행이면 새로 연다.</summary>
+    public void Observe(DateTime at, string category, string name)
+    {
+        _lastAt = at;
+        if (_pauseStart is DateTime paused)
+        {
+            _phasePaused += Math.Max(0, (at - paused).TotalSeconds);
+            _pauseStart = null;
+        }
+
+        if (category == GameEvents.GameCategory && name == GameEvents.Pause)
+        {
+            _pauseStart = at;
+        }
+    }
+
+    /// <summary>Shop 이벤트 하나. 모든 이벤트의 day로 현재 일차를 갱신하고, 일차가 바뀌면 새 낮 구간을 연다.</summary>
     public void Shop(DateTime at, string name, JsonElement data)
     {
         if (Number(data, "day") is double day && day >= 0 && day < 1000)
         {
-            _day = (int)day;
+            int today = (int)day;
+            if (_phase == null || _phase.Day != today)
+            {
+                StartPhase(at, today, night: false);
+            }
+
+            _day = today;
         }
 
         string orderId = Text(data, "orderId");
@@ -108,10 +138,16 @@ internal sealed class InsightTracker
         }
     }
 
-    /// <summary>습격 시작. 휴대 총 코드가 있으면 그 파츠를 습격 총으로 둔다.</summary>
-    public void RaidStart(string scene, JsonElement data)
+    /// <summary>습격 시작. 그날 밤 구간을 열고(이미 밤이면 이어 감), 휴대 총 코드가 있으면 그 파츠를 습격 총으로 둔다.</summary>
+    public void RaidStart(DateTime at, string scene, JsonElement data)
     {
         FinishRaid();
+        if (_day is int day && (_phase == null || !_phase.Night))
+        {
+            StartPhase(at, day, night: true);
+        }
+
+        _raidStart = at;
         _raid = new InsightRaid { Day = _day, Stage = scene };
         _digest.Raids.Add(_raid);
         if (Layout(data) is { } loadout)
@@ -168,8 +204,15 @@ internal sealed class InsightTracker
     }
 
     /// <summary>습격 종료 이벤트. 성공 여부와 보상 크레딧을 적고 구간을 닫는다.</summary>
-    public void RaidEnd(JsonElement data)
+    public void RaidEnd(DateTime at, JsonElement data)
     {
+        if (_phase is { Night: true } && _raidStart is DateTime started && at >= started)
+        {
+            _phase.RaidSeconds = (_phase.RaidSeconds ?? 0) + (at - started).TotalSeconds;
+            _phase.LastRaid = Bool(data, "survived") switch { true => "success", false => "fail", _ => string.Empty };
+        }
+
+        _raidStart = null;
         if (_raid == null)
         {
             return;
@@ -188,6 +231,12 @@ internal sealed class InsightTracker
     public void Finish(WeaponDigest weapons)
     {
         FinishRaid();
+        if (_phase != null)
+        {
+            ClosePhase(_lastAt);
+            _digest.Phases[^1].Ended = true;
+        }
+
         foreach (InsightRaid raid in _digest.Raids)
         {
             if (raid.Stage.Length == 0)
@@ -226,6 +275,27 @@ internal sealed class InsightTracker
 
         _digest.Orders.AddRange(_orders.Values.Where(o => o.Day != null));
         _digest.Days.AddRange(_days.OrderBy(p => p.Key).Select(p => p.Value));
+    }
+
+    /// <summary>열린 구간을 at에서 닫고 새 구간을 연다.</summary>
+    private void StartPhase(DateTime at, int day, bool night)
+    {
+        ClosePhase(at);
+        _phase = new InsightPhase { Day = day, Night = night };
+        _phaseStart = at;
+        _phasePaused = 0;
+    }
+
+    private void ClosePhase(DateTime at)
+    {
+        if (_phase == null)
+        {
+            return;
+        }
+
+        _phase.Seconds = Math.Max(0, (at - _phaseStart).TotalSeconds - _phasePaused);
+        _digest.Phases.Add(_phase);
+        _phase = null;
     }
 
     private void FinishRaid()
@@ -317,6 +387,7 @@ internal sealed class InsightDigest
     public readonly List<InsightDay> Days = new();
     public readonly List<InsightOrder> Orders = new();
     public readonly List<InsightRaid> Raids = new();
+    public readonly List<InsightPhase> Phases = new();
 }
 
 /// <summary>
@@ -424,6 +495,33 @@ public sealed class InsightVersion
     public List<InsightDay> Days { get; set; } = new();
     public List<InsightOrder> Orders { get; set; } = new();
     public List<InsightRaid> Raids { get; set; } = new();
+    public List<InsightPhase> Phases { get; set; } = new();
+}
+
+/// <summary>
+/// 플레이어(세션)의 n일차 낮 또는 밤 한 구간. Seconds는 일시정지를 뺀 실제 시간, RaidSeconds는 밤 중 습격 시작→종료 합이다.
+/// Ended면 세션이 이 구간에서 끝났다(이탈). LastRaid는 밤의 마지막 습격 결과(success, fail, 비면 모름)이고
+/// CleanEnd는 세션이 정상 종료됐는지(요약의 endedCleanly)다.
+/// </summary>
+public sealed class InsightPhase
+{
+    public int S { get; set; }
+    public int Day { get; set; }
+    public bool Night { get; set; }
+    public double Seconds { get; set; }
+    public double? RaidSeconds { get; set; }
+    public bool Ended { get; set; }
+    public string LastRaid { get; set; } = string.Empty;
+    public bool CleanEnd { get; set; }
+
+    /// <summary>세션 번호와 정상 종료 여부를 붙인 얕은 복사본. 캐시된 세션 기록은 바꾸지 않는다.</summary>
+    internal InsightPhase ForSession(int s, bool cleanEnd)
+    {
+        InsightPhase copy = (InsightPhase)MemberwiseClone();
+        copy.S = s;
+        copy.CleanEnd = cleanEnd;
+        return copy;
+    }
 }
 
 /// <summary>플레이어(세션) 하루의 상점 기록. Builds는 그날 작업대 퇴장 때 구성이 바뀐 총마다 파츠 이름별 개수다.</summary>
