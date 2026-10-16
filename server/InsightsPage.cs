@@ -32,9 +32,12 @@ public static class InsightsPage
 <body>
 <header>
   <div class="brand">LOGKIT<span>HYPOTHESIS STATS</span></div>
-  <a href="/analytics">버전 통계 →</a>
-  <a href="/weapons">총기 통계 →</a>
-  <a href="/dashboard">GM 툴(세션별 로그) →</a>
+  <nav class="pages">
+    <a href="/dashboard">GM 툴(세션별 로그)</a>
+    <a href="/analytics">버전 통계</a>
+    <a href="/weapons">총기 통계</a>
+    <b>가설 통계</b>
+  </nav>
   <div id="status" class="status"></div>
   <span class="spacer"></span>
   <select id="month"></select>

@@ -23,9 +23,12 @@ public static class AnalyticsPage
 <body>
 <header>
   <div class="brand">LOGKIT<span>VERSION STATS</span></div>
-  <a href="/dashboard">GM 툴(세션별 로그) →</a>
-  <a href="/weapons">총기 통계 →</a>
-  <a href="/insights">가설 통계 →</a>
+  <nav class="pages">
+    <a href="/dashboard">GM 툴(세션별 로그)</a>
+    <b>버전 통계</b>
+    <a href="/weapons">총기 통계</a>
+    <a href="/insights">가설 통계</a>
+  </nav>
   <div id="status" class="status"></div>
   <span class="spacer"></span>
   <select id="month"></select>

@@ -80,12 +80,21 @@ tr.xrow pre { margin: 4px 0; padding: 8px; background: #161b22; border: 1px soli
 .empty { padding: 18px; text-align: center; color: var(--muted); }
 h2 { font-size: 14px; margin: 0; font-family: Consolas, monospace; }
 nav { display: flex; align-items: center; gap: 8px; }
+nav.pages { gap: 12px; font-size: 12px; }
+nav.pages a { color: var(--muted); text-decoration: none; }
+nav.pages a:hover { color: var(--accent); }
+nav.pages b { color: var(--text); font-weight: 600; }
 </style>
 </head>
 <body>
 <header>
   <div class="brand">LOGKIT<span>GM TOOL</span></div>
-  <a href="/analytics" style="color:var(--muted);text-decoration:none;font-size:12px">플레이 분석 →</a>
+  <nav class="pages">
+    <b>GM 툴(세션별 로그)</b>
+    <a href="/analytics">버전 통계</a>
+    <a href="/weapons">총기 통계</a>
+    <a href="/insights">가설 통계</a>
+  </nav>
   <div id="status" class="status">API 키를 입력하고 연결하세요.</div>
   <span class="spacer"></span>
   <div class="keybox">

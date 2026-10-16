@@ -22,6 +22,8 @@ header { display: flex; align-items: center; gap: 12px; padding: 10px 16px; flex
 .brand span { color: var(--accent); font-size: 11px; margin-left: 6px; }
 header a { color: var(--muted); text-decoration: none; font-size: 12px; }
 header a:hover { color: var(--accent); }
+nav.pages { display: flex; align-items: center; gap: 12px; font-size: 12px; }
+nav.pages b { color: var(--text); font-weight: 600; }
 .status { color: var(--muted); font-size: 12px; }
 .status.err { color: var(--err); }
 .spacer { flex: 1; }
