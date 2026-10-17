@@ -75,6 +75,9 @@ public sealed class GameAnalytics
     private readonly SessionSummary _summary;
     private readonly ConcurrentDictionary<string, (DateTime WriteTime, SessionDigest Digest)> _cache = new(StringComparer.Ordinal);
 
+    // 캐시에 없는 세션을 채우는 작업은 한 번에 하나만 한다(기동 직후 예열과 첫 요청이 같은 세션을 두 번 파싱하지 않도록)
+    private readonly SemaphoreSlim _fillGate = new(1, 1);
+
     /// <summary>세션 저장소와 요약 집계기를 받아 분석기를 만든다.</summary>
     public GameAnalytics(CsvSessionStore store, SessionSummary summary)
     {
@@ -169,34 +172,74 @@ public sealed class GameAnalytics
             ? _summary.ListMonths().Select(info => info.Month).ToList()
             : new List<string> { month };
 
+        List<SessionRow> rows = months.SelectMany(m => _summary.GetMonthSessions(m))
+            .Where(row => !excludeEditor || !row.IsEditor)
+            .ToList();
+        FillCache(rows);
+
         Dictionary<string, List<(SessionRow Row, SessionDigest Digest)>> byVersion = new(StringComparer.Ordinal);
-        foreach (string m in months)
+        foreach (SessionRow row in rows)
         {
-            foreach (SessionRow row in _summary.GetMonthSessions(m))
+            SessionDigest? digest = GetDigest(row.SessionId);
+            if (digest == null)
             {
-                if (excludeEditor && row.IsEditor)
-                {
-                    continue;
-                }
-
-                SessionDigest? digest = GetDigest(row.SessionId);
-                if (digest == null)
-                {
-                    continue;
-                }
-
-                string version = string.IsNullOrEmpty(row.AppVersion) ? UNKNOWN : row.AppVersion;
-                if (!byVersion.TryGetValue(version, out List<(SessionRow, SessionDigest)>? list))
-                {
-                    list = new List<(SessionRow, SessionDigest)>();
-                    byVersion[version] = list;
-                }
-
-                list.Add((row, digest));
+                continue;
             }
+
+            string version = string.IsNullOrEmpty(row.AppVersion) ? UNKNOWN : row.AppVersion;
+            if (!byVersion.TryGetValue(version, out List<(SessionRow, SessionDigest)>? list))
+            {
+                list = new List<(SessionRow, SessionDigest)>();
+                byVersion[version] = list;
+            }
+
+            list.Add((row, digest));
         }
 
         return byVersion;
+    }
+
+    /// <summary>
+    /// 전체 세션의 요약을 미리 만들어 둔다. 기동 직후 첫 통계 요청이 모든 CSV를 파싱하느라 오래 걸리지 않게 한다.
+    /// </summary>
+    public void Warm()
+    {
+        FillCache(_summary.ListMonths().SelectMany(info => _summary.GetMonthSessions(info.Month)).ToList());
+    }
+
+    /// <summary>캐시에 없거나 CSV가 바뀐 세션의 요약을 병렬로 만든다. 세션 하나의 요약은 다른 세션과 독립이다.</summary>
+    private void FillCache(List<SessionRow> rows)
+    {
+        List<string> stale = rows.Select(row => row.SessionId).Where(IsStale).Distinct(StringComparer.Ordinal).ToList();
+        if (stale.Count == 0)
+        {
+            return;
+        }
+
+        _fillGate.Wait();
+        try
+        {
+            ParallelOptions parallel = new() { MaxDegreeOfParallelism = Math.Max(1, Environment.ProcessorCount / 2) };
+            // 큰 세션부터 시작해야 마지막에 큰 파일 하나만 남아 한 스레드로 도는 일이 줄어든다
+            Parallel.ForEach(stale.Where(IsStale).OrderByDescending(SessionSize), parallel, id => GetDigest(id));
+        }
+        finally
+        {
+            _fillGate.Release();
+        }
+    }
+
+    private bool IsStale(string sessionId)
+    {
+        string path = _store.SessionCsvPath(sessionId);
+        return File.Exists(path)
+            && !(_cache.TryGetValue(sessionId, out (DateTime WriteTime, SessionDigest Digest) cached) && cached.WriteTime == File.GetLastWriteTimeUtc(path));
+    }
+
+    private long SessionSize(string sessionId)
+    {
+        FileInfo file = new(_store.SessionCsvPath(sessionId));
+        return file.Exists ? file.Length : 0;
     }
 
     /// <summary>
@@ -218,13 +261,13 @@ public sealed class GameAnalytics
             return cached.Digest;
         }
 
-        string? csv = _store.ReadSessionCsv(sessionId);
-        if (csv == null)
+        List<LogEntry>? entries = _store.ReadSessionEntries(sessionId);
+        if (entries == null)
         {
             return null;
         }
 
-        SessionDigest digest = Digest(SessionQuery.ParseEntries(csv));
+        SessionDigest digest = Digest(entries);
         _cache[sessionId] = (writeTime, digest);
         return digest;
     }

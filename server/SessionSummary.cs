@@ -41,13 +41,13 @@ public sealed class SessionSummary
     public (SessionRow Row, UploadSummary Info)? ComputeSession(string sessionId, CsvSessionStore store)
     {
         SessionMeta? meta = store.ReadMeta(sessionId);
-        string? csvText = store.ReadSessionCsv(sessionId);
-        if (meta is null && csvText is null)
+        List<LogEntry>? parsed = store.ReadSessionEntries(sessionId);
+        if (meta is null && parsed is null)
         {
             return null;
         }
 
-        List<LogEntry> entries = csvText is null ? new List<LogEntry>() : SessionQuery.ParseEntries(csvText);
+        List<LogEntry> entries = parsed ?? new List<LogEntry>();
         bool hasStart = CsvSessionStore.TryParseUtc(meta?.StartedAtUtc, out DateTime startedAtUtc);
         DateTime reference = hasStart ? startedAtUtc : DateTime.UtcNow;
         bool hasEnd = CsvSessionStore.TryParseUtc(meta?.EndedAtUtc, out DateTime endedAtUtc);

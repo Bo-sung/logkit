@@ -6,25 +6,62 @@ namespace LogServer;
 /// </summary>
 public static class CsvText
 {
+    private static readonly System.Buffers.SearchValues<char> _special = System.Buffers.SearchValues.Create(",\r\n\"");
+
     /// <summary>
     /// CSV 텍스트를 행 목록으로 읽어 들인다.
     /// text를 입력으로 사용하며 비어 있지 않은 행만 담은 목록을 반환한다.
     /// </summary>
-    public static List<string[]> ParseRows(string text)
-    {
-        List<string[]> rows = new();
-        List<string> fields = new();
-        System.Text.StringBuilder field = new();
-        bool quoted = false;
+    public static List<string[]> ParseRows(string text) => ReadRows(new StringReader(text)).ToList();
 
-        for (int i = 0; i < text.Length; i++)
+    /// <summary>
+    /// CSV를 읽기 도구에서 한 행씩 읽는다. 파일 전체를 문자열로 올리지 않아 큰 세션 CSV도 메모리를 적게 쓴다.
+    /// 규칙은 RFC 4180(인용 필드 안의 쉼표·개행, 겹쳐 쓴 따옴표)이며 빈 행은 건너뛴다. 따옴표 밖의 CR(\r)은 무시한다.
+    /// </summary>
+    public static IEnumerable<string[]> ReadRows(TextReader reader)
+    {
+        char[] buffer = new char[1 << 16];
+        System.Text.StringBuilder field = new();
+        List<string> fields = new(8);
+        bool quoted = false;
+        bool quoteAtEnd = false; // 인용 중 버퍼 끝에서 따옴표를 만남: 다음 글자가 따옴표면 이스케이프, 아니면 인용 끝
+        int read;
+        while ((read = reader.Read(buffer, 0, buffer.Length)) > 0)
         {
-            char c = text[i];
-            if (quoted)
+            int i = 0;
+            if (quoteAtEnd)
             {
-                if (c == '"')
+                quoteAtEnd = false;
+                if (buffer[0] == '"')
                 {
-                    if (i + 1 < text.Length && text[i + 1] == '"')
+                    field.Append('"');
+                    i = 1;
+                }
+                else
+                {
+                    quoted = false;
+                }
+            }
+
+            while (i < read)
+            {
+                if (quoted)
+                {
+                    int close = Array.IndexOf(buffer, '"', i, read - i);
+                    if (close < 0)
+                    {
+                        field.Append(buffer, i, read - i);
+                        i = read;
+                        break;
+                    }
+
+                    field.Append(buffer, i, close - i);
+                    i = close + 1;
+                    if (i == read)
+                    {
+                        quoteAtEnd = true;
+                    }
+                    else if (buffer[i] == '"')
                     {
                         field.Append('"');
                         i++;
@@ -33,45 +70,52 @@ public static class CsvText
                     {
                         quoted = false;
                     }
+
+                    continue;
                 }
-                else
+
+                int next = buffer.AsSpan(i, read - i).IndexOfAny(_special);
+                if (next < 0)
                 {
-                    field.Append(c);
+                    field.Append(buffer, i, read - i);
+                    break;
                 }
 
-                continue;
-            }
+                field.Append(buffer, i, next);
+                i += next;
+                char c = buffer[i++];
+                switch (c)
+                {
+                    case '"':
+                        quoted = true;
+                        break;
+                    case ',':
+                        fields.Add(field.ToString());
+                        field.Clear();
+                        break;
+                    case '\n':
+                        fields.Add(field.ToString());
+                        field.Clear();
+                        if (!IsEmptyRow(fields))
+                        {
+                            yield return fields.ToArray();
+                        }
 
-            switch (c)
-            {
-                case '"':
-                    quoted = true;
-                    break;
-                case ',':
-                    fields.Add(field.ToString());
-                    field.Clear();
-                    break;
-                case '\r':
-                    break;
-                case '\n':
-                    fields.Add(field.ToString());
-                    field.Clear();
-                    rows.Add(fields.ToArray());
-                    fields.Clear();
-                    break;
-                default:
-                    field.Append(c);
-                    break;
+                        fields.Clear();
+                        break;
+                }
             }
         }
 
         if (field.Length > 0 || fields.Count > 0)
         {
             fields.Add(field.ToString());
-            rows.Add(fields.ToArray());
+            if (!IsEmptyRow(fields))
+            {
+                yield return fields.ToArray();
+            }
         }
-
-        rows.RemoveAll(row => row.Length == 0 || (row.Length == 1 && row[0].Length == 0));
-        return rows;
     }
+
+    private static bool IsEmptyRow(List<string> fields) => fields.Count == 0 || (fields.Count == 1 && fields[0].Length == 0);
 }

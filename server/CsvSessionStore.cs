@@ -125,7 +125,10 @@ public sealed class CsvSessionStore
     /// 세션 CSV 전문을 읽어 들인다. 다른 스레드의 교체 쓰기와 충돌하지 않도록 공유 읽기로 연다.
     /// sessionId를 입력으로 사용하며 파일이 없으면 null을 반환한다.
     /// </summary>
-    public string? ReadSessionCsv(string sessionId)
+    /// <summary>
+    /// 통합 CSV를 문자열로 올리지 않고 한 행씩 읽어 로그 항목 목록으로 만든다. CSV가 없으면 null.
+    /// </summary>
+    public List<LogEntry>? ReadSessionEntries(string sessionId)
     {
         string path = SessionCsvPath(sessionId);
         if (!File.Exists(path))
@@ -133,9 +136,9 @@ public sealed class CsvSessionStore
             return null;
         }
 
-        using FileStream stream = new(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
+        using FileStream stream = new(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite, 1 << 16);
         using StreamReader reader = new(stream, System.Text.Encoding.UTF8);
-        return reader.ReadToEnd();
+        return SessionQuery.ParseEntries(reader);
     }
 
     /// <summary>

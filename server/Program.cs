@@ -113,6 +113,18 @@ public static class Program
         builder.Services.AddSingleton<UploadInbox>();
         builder.Services.AddHostedService<InboxProcessor>();
         builder.Services.AddSingleton<GameAnalytics>();
+        builder.Services.AddSingleton<SessionEntryCache>();
+        // 통계 JSON(수백 KB)과 세션 CSV 내려받기를 압축해 원격 브라우저의 전송 시간을 줄인다
+        builder.Services.AddResponseCompression(compression =>
+        {
+            compression.Providers.Add<Microsoft.AspNetCore.ResponseCompression.BrotliCompressionProvider>();
+            compression.Providers.Add<Microsoft.AspNetCore.ResponseCompression.GzipCompressionProvider>();
+            compression.MimeTypes = Microsoft.AspNetCore.ResponseCompression.ResponseCompressionDefaults.MimeTypes.Append("text/csv");
+        });
+        builder.Services.Configure<Microsoft.AspNetCore.ResponseCompression.BrotliCompressionProviderOptions>(
+            brotli => brotli.Level = System.IO.Compression.CompressionLevel.Fastest);
+        builder.Services.Configure<Microsoft.AspNetCore.ResponseCompression.GzipCompressionProviderOptions>(
+            gzip => gzip.Level = System.IO.Compression.CompressionLevel.Fastest);
         builder.Services.Configure<Microsoft.AspNetCore.Server.Kestrel.Core.KestrelServerOptions>(kestrel =>
         {
             kestrel.Limits.MaxRequestBodySize = options.MaxBodyBytes;
@@ -120,6 +132,7 @@ public static class Program
 
         WebApplication app = builder.Build();
 
+        app.UseResponseCompression();
         app.UseMiddleware<ApiKeyAuth>();
         app.MapGet("/", () => Results.Redirect("/dashboard"));
         app.MapGet("/dashboard", HandleDashboard);
@@ -143,6 +156,20 @@ public static class Program
 
         PrepareStorage(options, app.Services.GetRequiredService<CsvSessionStore>(), app.Logger);
 
+        // 기동 직후 전체 세션 요약을 미리 만들어 첫 통계 페이지가 CSV 전체 파싱을 기다리지 않게 한다
+        app.Lifetime.ApplicationStarted.Register(() => Task.Run(() =>
+        {
+            System.Diagnostics.Stopwatch watch = System.Diagnostics.Stopwatch.StartNew();
+            try
+            {
+                app.Services.GetRequiredService<GameAnalytics>().Warm();
+                app.Logger.LogInformation("세션 요약 예열 완료 ({Seconds:F1}초)", watch.Elapsed.TotalSeconds);
+            }
+            catch (Exception e)
+            {
+                app.Logger.LogWarning(e, "세션 요약 예열 실패");
+            }
+        }));
         app.Run();
     }
 
@@ -331,7 +358,8 @@ public static class Program
         string? limit,
         ServerOptions options,
         CsvSessionStore store,
-        SessionSummary summary)
+        SessionSummary summary,
+        SessionEntryCache entryCache)
     {
         if (!CsvSessionStore.IsValidSessionId(sessionId))
         {
@@ -339,14 +367,14 @@ public static class Program
         }
 
         (string Month, SessionRow Row)? meta = summary.FindSession(sessionId);
-        string? csvText = store.ReadSessionCsv(sessionId);
-        if (meta is null && csvText is null)
+        List<LogEntry>? parsed = entryCache.Get(sessionId);
+        if (meta is null && parsed is null)
         {
             return Results.NotFound();
         }
 
         SessionRow metaRow = meta?.Row ?? new SessionRow();
-        List<LogEntry> entries = csvText is null ? new List<LogEntry>() : SessionQuery.ParseEntries(csvText);
+        List<LogEntry> entries = parsed ?? new List<LogEntry>();
         HashSet<string> levelSet = ParseLevels(levels);
         int parsedOffset = Math.Max(0, ParseIntQuery(offset));
         int parsedLimit = Math.Clamp(ParseIntQuery(limit, SessionQuery.DefaultLimit), 1, SessionQuery.MaxLimit);
@@ -358,7 +386,7 @@ public static class Program
         return Results.Json(new SessionDetailResponse
         {
             SessionId = sessionId,
-            HasCsv = csvText is not null,
+            HasCsv = parsed is not null,
             HasSummaryRow = meta is not null,
             DateUtc = metaRow.DateUtc,
             DurationSec = metaRow.DurationSec,
@@ -390,10 +418,12 @@ public static class Program
             return Results.BadRequest(new { error = "invalid sessionId" });
         }
 
-        string? text = store.ReadSessionCsv(sessionId);
-        return text is null
-            ? Results.NotFound()
-            : Results.File(System.Text.Encoding.UTF8.GetBytes(text), "text/csv; charset=utf-8", sessionId + ".csv");
+        // 큰 세션(100MB 이상)도 메모리에 올리지 않고 파일을 그대로 흘려 보낸다
+        string path = store.SessionCsvPath(sessionId);
+        return File.Exists(path)
+            ? Results.Stream(new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite, 1 << 16),
+                "text/csv; charset=utf-8", sessionId + ".csv")
+            : Results.NotFound();
     }
 
     /// <summary>

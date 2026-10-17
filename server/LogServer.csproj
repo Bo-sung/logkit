@@ -6,6 +6,8 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <RootNamespace>LogServer</RootNamespace>
     <AssemblyName>LogServer</AssemblyName>
+    <!-- 서버 GC가 힙을 작업량에 맞춰 줄이도록(DATAS). 기본 서버 GC는 코어 수만큼 힙을 잡아 유휴 때도 수 GB를 쥐고 있다. -->
+    <GarbageCollectionAdaptationMode>1</GarbageCollectionAdaptationMode>
   </PropertyGroup>
 
 </Project>
