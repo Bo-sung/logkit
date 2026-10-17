@@ -74,7 +74,7 @@ public static class WeaponsPage
 
   <section class="card wide">
     <div class="row" style="justify-content:space-between">
-      <div><h3>파츠별 사용량</h3>
+      <div><h3>파츠별 사용량<span class="unitsw" data-unit="parts"></span></h3>
         <p class="sub" id="parts-sub" style="margin:0"></p></div>
       <select id="partmetric">
         <option value="adoption">채택률 (그 파츠를 넣은 총 비율)</option>
@@ -94,7 +94,7 @@ public static class WeaponsPage
   <div class="section">파츠 조합</div>
 
   <section class="card">
-    <h3>파츠 조합 빈도</h3>
+    <h3>파츠 조합 빈도<span class="unitsw" data-unit="combos"></span></h3>
     <p class="sub">개수·배치와 무관하게 들어간 파츠 종류의 집합 · 버전 내 비율 · 상위 15개</p>
     <div id="c-combos" class="chart"></div>
   </section>
@@ -110,7 +110,7 @@ public static class WeaponsPage
   </section>
 
   <section class="card">
-    <h3>총 크기 분포</h3>
+    <h3>총 크기 분포<span class="unitsw" data-unit="size"></span></h3>
     <p class="sub">코어를 뺀 파츠 블록 수 · 버전 내 비율</p>
     <div id="c-size" class="chart"></div>
   </section>
@@ -333,18 +333,16 @@ function renderParts(vs) {
     const p = v._parts.get(name);
     if (metric === "adoption") {
       if (!v._total) return null;
-      const r = p ? p.guns / v._total : 0;
-      return { value: r, label: pct(r, 0), tip: pct(r) + " (" + num(p ? p.guns : 0, 0) + " / " + num(v._total, 0) + basis().unit + ")" };
+      return shareBar("parts", p ? p.guns : 0, v._total, basis().unit);
     }
     if (metric === "share") {
       if (!v._blocks) return null;
-      const r = p ? p.blocks / v._blocks : 0;
-      return { value: r, label: pct(r, 1), tip: pct(r) + " (" + num(p ? p.blocks : 0, 0) + " / " + num(v._blocks, 0) + " 블록)" };
+      return shareBar("parts", p ? p.blocks : 0, v._blocks, " 블록", 1);
     }
     if (!p || !p.guns) return null;
     const r = p.blocks / p.guns;
     return { value: r, label: num(r, 2) + "개", tip: "평균 " + num(r, 2) + "개 (" + num(p.blocks, 0) + " 블록 / " + num(p.guns, 0) + basis().unit + ")" };
-  }, metric === "adoption" ? 1 : 0, metric === "perGun");
+  }, metric === "adoption" && !isCount("parts") ? 1 : 0, metric === "perGun");
 
   let h = '<div class="tablewrap"><table><thead><tr><th>파츠</th><th>버전</th><th>' + esc(n) + "</th><th>비율</th>" +
     "<th>블록 점유율</th><th>넣었을 때 평균 개수</th><th>판매 총</th><th>판매 평균가 (전체 대비)</th>" +
@@ -388,7 +386,7 @@ function renderCombos(vs) {
   hbars($("c-combos"), vs, keys, (v, key) => {
     if (!v._total) return null;
     const n = perVersion.get(v.version).get(key) || 0;
-    return { value: n / v._total, label: pct(n / v._total, 0), tip: pct(n / v._total) + " (" + num(n, 0) + " / " + num(v._total, 0) + basis().unit + ")" };
+    return shareBar("combos", n, v._total, basis().unit);
   }, 0, false, 230);
 }
 
@@ -448,7 +446,7 @@ function renderSize(vs) {
     const list = [];
     v.configs.forEach((c) => { for (let i = 0; i < weight(c); i++) list.push(c.blocks); });
     return list;
-  }, cats, (n) => { const i = edges.findIndex((e) => n < e); return i < 0 ? edges.length : i; }, basis().unit);
+  }, cats, (n) => { const i = edges.findIndex((e) => n < e); return i < 0 ? edges.length : i; }, basis().unit, "size");
 }
 
 function renderConfigs(vs) {

@@ -53,19 +53,19 @@ public static class AnalyticsPage
   <div class="section">상점 운영</div>
 
   <section class="card">
-    <h3>판매액 분포</h3>
+    <h3>판매액 분포<span class="unitsw" data-unit="price"></span></h3>
     <p class="sub">Shop / weapon_sold(초기 빌드는 총 판매)의 price · 버전 내 판매 비율 (Unity 콘솔 중복 출력 제외)</p>
     <div id="c-price" class="chart"></div>
   </section>
 
   <section class="card">
-    <h3>판매 태그 수 분포</h3>
+    <h3>판매 태그 수 분포<span class="unitsw" data-unit="tags"></span></h3>
     <p class="sub">판매의 tagCount · 버전 내 판매 비율</p>
     <div id="c-tags" class="chart"></div>
   </section>
 
   <section class="card">
-    <h3>작업대 체류 시간 분포</h3>
+    <h3>작업대 체류 시간 분포<span class="unitsw" data-unit="workbench"></span></h3>
     <p class="sub">같은 씬의 시간순 작업대 진입 → 퇴장 쌍 · 버전 내 비율</p>
     <div id="c-workbench" class="chart"></div>
   </section>
@@ -83,7 +83,7 @@ public static class AnalyticsPage
   <div class="section">야간 습격</div>
 
   <section class="card">
-    <h3>스테이지별 생존 비율</h3>
+    <h3>스테이지별 생존 비율<span class="unitsw" data-unit="survival"></span></h3>
     <p class="sub">종료 이벤트의 survived 기준 · 막대 옆은 생존 / 종료 기록 습격 수</p>
     <div id="c-survival" class="chart"></div>
   </section>
@@ -106,7 +106,7 @@ public static class AnalyticsPage
   </section>
 
   <section class="card">
-    <h3>종료 보상 모듈 ID</h3>
+    <h3>종료 보상 모듈 ID<span class="unitsw" data-unit="rewards"></span></h3>
     <p class="sub">종료 이벤트 moduleCrateRewards · 버전 내 비율. 사망 후 실제 지급 여부는 알 수 없습니다.</p>
     <div id="c-rewards" class="chart"></div>
   </section>
@@ -217,13 +217,13 @@ function renderShop(vs) {
   const bins = Math.max(1, Math.ceil((maxPrice + 1e-9) / step));
   const short = (x) => x >= 1000 ? num(x / 1000, 1) + "k" : num(x, 0);
   const priceCats = Array.from({ length: bins }, (_, i) => short(i * step) + "~");
-  distribution($("c-price"), vs, (v) => v.prices, priceCats, (p) => Math.min(bins - 1, Math.floor(p / step)), "건");
+  distribution($("c-price"), vs, (v) => v.prices, priceCats, (p) => Math.min(bins - 1, Math.floor(p / step)), "건", "price");
 
-  distribution($("c-tags"), vs, (v) => v.tagCounts, ["0", "1", "2", "3", "4+"], (t) => Math.min(4, Math.max(0, t)), "건");
+  distribution($("c-tags"), vs, (v) => v.tagCounts, ["0", "1", "2", "3", "4+"], (t) => Math.min(4, Math.max(0, t)), "건", "tags");
 
   const edges = [5, 15, 30, 60];
   distribution($("c-workbench"), vs, (v) => v.workbenchSeconds, ["~5초", "5~15초", "15~30초", "30~60초", "60초~"],
-    (s) => { const i = edges.findIndex((e) => s < e); return i < 0 ? edges.length : i; }, "회");
+    (s) => { const i = edges.findIndex((e) => s < e); return i < 0 ? edges.length : i; }, "회", "workbench");
 }
 
 function renderRaid(vs) {
@@ -232,9 +232,10 @@ function renderRaid(vs) {
   hbars($("c-survival"), vs, stages, (v, scene) => {
     const s = stageOf(v, scene);
     if (!s || s.survivedRate == null) return null;
-    return { value: s.survivedRate, label: pct(s.survivedRate, 0) + " · " + s.survived + "/" + s.ended,
+    const count = isCount("survival");
+    return { value: count ? s.survived : s.survivedRate, label: (count ? s.survived + "회" : pct(s.survivedRate, 0)) + " · " + s.survived + "/" + s.ended,
       tip: "생존 " + pct(s.survivedRate) + " (" + s.survived + " / 종료 " + s.ended + "회)" };
-  }, 1);
+  }, isCount("survival") ? 0 : 1);
 
   const metric = $("tlmetric").value;
   const metricName = $("tlmetric").selectedOptions[0].textContent;
@@ -270,7 +271,7 @@ function renderRaid(vs) {
     const k = v.moduleRewards.find((x) => x.key === key);
     const total = rewardTotal.get(v.version);
     if (!k || !total) return null;
-    return { value: k.count / total, label: pct(k.count / total, 0), tip: pct(k.count / total) + " (" + k.count + " / " + total + "건)" };
+    return shareBar("rewards", k.count, total, "건");
   });
 
   const per = [["습격당 블록 파괴", (r) => r.blocks], ["습격당 적 처치 (이벤트)", (r) => r.enemiesKilled]];

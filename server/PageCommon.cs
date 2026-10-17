@@ -77,6 +77,11 @@ tr.group td { background: #1c2128; color: var(--muted); font-size: 11.5px; lette
 .missing div { border: 1px dashed var(--border); border-radius: 6px; padding: 8px 10px; color: var(--muted); font-size: 12px; }
 .missing b { color: var(--text); display: block; font-weight: 600; }
 details summary { cursor: pointer; color: var(--muted); }
+.unitsw { display: inline-flex; margin-left: 10px; vertical-align: middle; border: 1px solid var(--border); border-radius: 6px;
+  overflow: hidden; font-weight: 400; }
+.unitsw button { border: 0; border-radius: 0; padding: 1px 8px; font-size: 11px; color: var(--muted); background: transparent; }
+.unitsw button + button { border-left: 1px solid var(--border); }
+.unitsw button.on { background: #1f6feb40; color: var(--text); }
 details pre { font: 11.5px/1.6 Consolas, monospace; background: #0d1117; border: 1px solid var(--border);
   border-radius: 6px; padding: 10px; overflow: auto; }
 """;
@@ -110,6 +115,33 @@ async function api(path) {
 const num = (n, d = 1) => n == null || !isFinite(n) ? "–" : Number(n).toLocaleString(undefined, { maximumFractionDigits: d });
 const pct = (r, d = 1) => r == null || !isFinite(r) ? "–" : (r * 100).toFixed(d) + "%";
 const ratio = (a, b) => b > 0 ? a / b : null;
+
+/** 비율 ↔ 표본 수 토글 상태. 카드 제목에 <span class="unitsw" data-unit="키"></span>를 두면 initPage가 버튼을 채운다. */
+function isCount(key) { return ((state.units || {})[key] || "pct") === "count"; }
+/** 가로 막대 값: 비율 모드면 n / total, 표본 수 모드면 n. unit = 표본 단위(건·명·회). */
+function shareBar(key, n, total, unit, d = 0) {
+  const r = total ? n / total : 0, tip = pct(r) + " (" + num(n, 0) + " / " + num(total, 0) + unit + ")";
+  return isCount(key) ? { value: n, label: num(n, 0) + unit, tip } : { value: r, label: pct(r, d), tip };
+}
+function initUnitSwitches() {
+  state.units = loadPrefs().units || {};
+  document.querySelectorAll(".unitsw").forEach((el) => {
+    const key = el.dataset.unit;
+    const draw = () => {
+      el.innerHTML = [["pct", "비율"], ["count", "표본 수"]].map(([k, n]) => '<button type="button" data-k="' + k + '"' +
+        ((isCount(key) ? "count" : "pct") === k ? ' class="on"' : "") + ">" + n + "</button>").join("");
+    };
+    el.onclick = (ev) => {
+      const b = ev.target.closest("button");
+      if (!b) return;
+      state.units[key] = b.dataset.k;
+      savePrefs({ units: state.units });
+      draw();
+      if (state.data) render();
+    };
+    draw();
+  });
+}
 function dur(sec) {
   if (sec == null || !isFinite(sec)) return "–";
   if (sec < 60) return sec.toFixed(1) + "초";
@@ -122,6 +154,8 @@ function toLocal(ts) {
   const d = new Date(Date.UTC(+m[1], +m[2] - 1, +m[3], +m[4], +m[5], +m[6]));
   return d.toLocaleString("sv-SE").slice(0, 16);
 }
+/** 건수 축 최댓값. 눈금 4칸이 모두 정수가 되도록 4의 배수로 올린다. */
+function countMax(n) { return Math.max(4, Math.ceil(niceMax(Math.max(1, n) / 4)) * 4); }
 function niceMax(v) {
   if (!(v > 0)) return 1;
   const p = Math.pow(10, Math.floor(Math.log10(v)));
@@ -166,8 +200,12 @@ function yAxis(W, top, plotH, left, max, fmt) {
   return s;
 }
 
-/** 버전별 값 목록을 구간 비율로 바꿔 세로 묶음 막대로 그린다. bucketOf(value) → 구간 인덱스. */
-function distribution(el, vs, valuesOf, cats, bucketOf, unit) {
+/**
+ * 버전별 값 목록을 구간 비율로 바꿔 세로 묶음 막대로 그린다. bucketOf(value) → 구간 인덱스.
+ * unitKey의 토글이 표본 수면 비율 대신 구간별 건수를 그린다.
+ */
+function distribution(el, vs, valuesOf, cats, bucketOf, unit, unitKey) {
+  const count = !!unitKey && isCount(unitKey);
   const series = vs.map((v) => {
     const counts = new Array(cats.length).fill(0);
     const values = valuesOf(v);
@@ -178,17 +216,17 @@ function distribution(el, vs, valuesOf, cats, bucketOf, unit) {
   const W = widthOf(el), H = 240, left = 48, top = 10, bottom = 26;
   const plotW = W - left - 8, plotH = H - top - bottom;
   let max = 0;
-  series.forEach((s) => s.counts.forEach((c) => { max = Math.max(max, c / s.total); }));
-  max = niceMax(max);
+  series.forEach((s) => s.counts.forEach((c) => { max = Math.max(max, count ? c : c / s.total); }));
+  max = count ? countMax(max) : niceMax(max);
   const groupW = plotW / cats.length, gap = 2;
   const barW = Math.max(2, Math.min(18, (groupW * 0.78 - gap * (series.length - 1)) / series.length));
   const usedW = barW * series.length + gap * (series.length - 1);
-  let s = yAxis(W, top, plotH, left, max, (x) => num(x * 100, 1) + "%");
+  let s = yAxis(W, top, plotH, left, max, count ? (x) => num(x, 0) : (x) => num(x * 100, 1) + "%");
   cats.forEach((cat, c) => {
     const gx = left + groupW * c + (groupW - usedW) / 2;
     series.forEach((sr, i) => {
       const share = sr.counts[c] / sr.total;
-      const h = plotH * share / max;
+      const h = plotH * (count ? sr.counts[c] : share) / max;
       const x = gx + i * (barW + gap);
       s += '<path d="' + barUp(x, top + plotH - h, barW, h) + '" fill="' + color(sr.v) + '"/>';
       s += '<rect x="' + (x - gap / 2) + '" y="' + top + '" width="' + (barW + gap) + '" height="' + plotH +
@@ -368,6 +406,7 @@ document.addEventListener("mousemove", (ev) => {
 
 /** 머리글 컨트롤을 연결하고 저장된 키가 있으면 바로 불러온다. 페이지 스크립트 끝에서 부른다. */
 function initPage() {
+  initUnitSwitches();
   $("load").onclick = load;
   $("key").addEventListener("keydown", (ev) => { if (ev.key === "Enter") load(); });
   $("month").onchange = load;

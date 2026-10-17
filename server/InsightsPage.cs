@@ -68,7 +68,7 @@ public static class InsightsPage
 
   <section class="card wide">
     <div class="row" style="justify-content:space-between">
-      <div><h3>n일차 낮·밤 플레이 타임과 이탈률<span class="basever"></span></h3>
+      <div><h3>n일차 낮·밤 플레이 타임과 이탈률<span class="basever"></span><span class="unitsw" data-unit="churn"></span></h3>
         <p class="sub" style="margin:0">위: 구간 플레이 시간(일시정지 제외) · 아래: 그 구간에서 끝난 플레이어 / 그 구간에 도달한 플레이어 ·
           낮 = 그날 첫 상점 이벤트 → 첫 습격 시작, 밤 = 첫 습격 시작 → 다음 날 첫 상점 이벤트</p></div>
       <div class="row">
@@ -130,7 +130,7 @@ public static class InsightsPage
     <p class="sub">에디터 단계 넘기기(debugSkipped)가 있는 진행은 뺌 · 가이드 표시 정책 필드가 없어 정책 비교 대신 버전끼리 비교합니다</p>
     <div class="subhead">결과</div>
     <div id="t-tutorial"></div>
-    <div class="subhead">단계별 퍼널</div>
+    <div class="subhead">단계별 퍼널<span class="unitsw" data-unit="funnel"></span></div>
     <p class="sub">그 단계를 시작한 진행 / 튜토리얼을 시작한 진행 · 건너뛰기는 뺌</p>
     <div id="c-funnel" class="chart scroll"></div>
     <div class="subhead">단계 소요 시간</div>
@@ -154,7 +154,7 @@ public static class InsightsPage
   <section class="card">
     <div class="row" style="justify-content:space-between">
       <div><div class="q">장비 보존·입장료 방식이 실패 후 재도전을 늘리는가?</div>
-        <h3>습격 실패 뒤 재도전 비율</h3>
+        <h3>습격 실패 뒤 재도전 비율<span class="unitsw" data-unit="retry"></span></h3>
         <p class="sub" style="margin:0">습격 실패 1회 = 1 · 재도전 = 같은 플레이어가 이후 다시 습격함(저장 불러오기 포함) · 색 = 재도전, 회색 = 재도전 안 함</p></div>
       <select id="retrymode">
         <option value="retried">아무 스테이지나 다시 습격</option>
@@ -167,7 +167,7 @@ public static class InsightsPage
   <section class="card">
     <div class="q">종결 총기가 2~3일차에 너무 일찍 완성되는가?</div>
     <div class="row" style="justify-content:space-between">
-      <h3>종결 총기 달성 플레이어 비율</h3>
+      <h3>종결 총기 달성 플레이어 비율<span class="unitsw" data-unit="endgame"></span></h3>
       <select id="endsource">
         <option value="builds">공방 빌드 (손님이 요구한 특성 제외)</option>
         <option value="allbuilds">공방 빌드 전체</option>
@@ -236,7 +236,7 @@ public static class InsightsPage
   </section>
 
   <section class="card wide">
-    <h3>일차별 야간 습격 총기 모듈 빈도<span class="basever"></span></h3>
+    <h3>일차별 야간 습격 총기 모듈 빈도<span class="basever"></span><span class="unitsw" data-unit="modules"></span></h3>
     <p class="sub">그 모듈이 들어간 총으로 나간 습격 / 그날 밤 총을 확인한 습격</p>
     <div class="row" style="margin:6px 0"><span class="muted">적음</span><span class="ramp"></span><span class="muted">많음</span></div>
     <div id="c-modules" class="cells"></div>
@@ -406,11 +406,16 @@ function boxH(el, vs, cats, valuesOf, fmt) {
 }
 
 /** 일차 × 버전 100% 누적 막대. partsOf(v, day) → { yes, total }. 아래(버전 색) = yes, 위(회색) = 나머지. */
-function stacked100(el, vs, days, partsOf, yesName, noName) {
+function stacked100(el, vs, days, partsOf, yesName, noName, unitKey) {
   const rows = vs.map((v) => ({ v, cells: days.map((d) => partsOf(v, d)) })).filter((r) => r.cells.some((c) => c.total > 0));
   if (!rows.length || !days.length) { el.innerHTML = emptyBox("기록된 데이터가 없습니다."); return; }
   const W = widthOf(el), H = 250, left = 48, top = 10, bottom = 28, plotW = W - left - 8, plotH = H - top - bottom;
-  let s = yAxis(W, top, plotH, left, 1, (x) => num(x * 100, 0) + "%");
+  // 표본 수 모드면 막대 높이 = 건수(같은 축), 아니면 칸마다 100%
+  const count = !!unitKey && isCount(unitKey);
+  let maxN = 0;
+  rows.forEach((r) => r.cells.forEach((c) => { maxN = Math.max(maxN, c.total); }));
+  const scaleMax = count ? countMax(maxN) : 1;
+  let s = yAxis(W, top, plotH, left, scaleMax, count ? (x) => num(x, 0) : (x) => num(x * 100, 0) + "%");
   const groupW = plotW / days.length, gap = 2;
   const bw = Math.max(4, Math.min(28, (groupW * 0.8 - gap * (rows.length - 1)) / rows.length));
   const used = bw * rows.length + gap * (rows.length - 1);
@@ -419,12 +424,13 @@ function stacked100(el, vs, days, partsOf, yesName, noName) {
     rows.forEach((r, i) => {
       const cell = r.cells[c];
       if (!cell.total) return;
-      const x = gx + i * (bw + gap), share = cell.yes / cell.total, hy = plotH * share;
+      const denom = count ? scaleMax : cell.total;
+      const x = gx + i * (bw + gap), share = cell.yes / cell.total, hy = plotH * cell.yes / denom, hAll = plotH * cell.total / denom;
       const yTop = top + plotH - hy;
       if (cell.yes > 0) s += '<path d="' + barUp(x, yTop, bw, hy) + '" fill="' + color(r.v) + '"/>';
       if (cell.yes < cell.total) {
-        const hn = plotH - hy - (cell.yes > 0 ? 2 : 0);
-        s += '<path d="' + barUp(x, top, bw, hn) + '" fill="' + NEUTRAL + '"/>';
+        const hn = hAll - hy - (cell.yes > 0 ? 2 : 0);
+        s += '<path d="' + barUp(x, top + plotH - hAll, bw, hn) + '" fill="' + NEUTRAL + '"/>';
       }
       s += '<rect x="' + (x - gap / 2) + '" y="' + top + '" width="' + (bw + gap) + '" height="' + plotH + '" fill="transparent" data-tip="' +
         esc(r.v.version + " · " + dayLabel(d) + "\n" + yesName + " " + pct(share) + " (" + cell.yes + ")\n" + noName + " " +
@@ -495,7 +501,10 @@ function renderPhase() {
   const W = widthOf(el), left = 56, right = 8, top = 10, plotW = W - left - right;
   const timeH = 230, gapH = 34, rateH = 140, H = top + timeH + gapH + rateH + 26;
   const rateTop = top + timeH + gapH;
-  const sy = (y) => top + timeH - y / maxY * timeH, ry = (r) => rateTop + rateH - r * rateH;
+  // 아래 막대: 비율 모드면 이탈률(0~1), 표본 수 모드면 이탈 인원(가장 큰 값 기준 축)
+  const churnCount = isCount("churn");
+  const churnMax = churnCount ? countMax(Math.max(...cells.flat().map((c) => c.ended))) : 1;
+  const sy = (y) => top + timeH - y / maxY * timeH, ry = (r) => rateTop + rateH - r / churnMax * rateH;
   const groupW = plotW / days.length, bw = Math.max(6, Math.min(30, groupW * 0.32)), gap = 4;
   const fmtMin = (x) => num(x, 1) + "분";
   const NL = String.fromCharCode(10);
@@ -504,11 +513,11 @@ function renderPhase() {
     s += '<line x1="' + left + '" x2="' + (W - right) + '" y1="' + sy(t) + '" y2="' + sy(t) + '" stroke="' + (t === 0 ? "var(--axis)" : "var(--grid)") + '"/>';
     s += '<text x="' + (left - 6) + '" y="' + (sy(t) + 4) + '" text-anchor="end">' + esc(fmtMin(t)) + "</text>";
   });
-  [0, 0.25, 0.5, 0.75, 1].forEach((t) => {
+  [0, 0.25, 0.5, 0.75, 1].map((t) => t * churnMax).forEach((t) => {
     s += '<line x1="' + left + '" x2="' + (W - right) + '" y1="' + ry(t) + '" y2="' + ry(t) + '" stroke="' + (t === 0 ? "var(--axis)" : "var(--grid)") + '"/>';
-    s += '<text x="' + (left - 6) + '" y="' + (ry(t) + 4) + '" text-anchor="end">' + (t * 100) + "%</text>";
+    s += '<text x="' + (left - 6) + '" y="' + (ry(t) + 4) + '" text-anchor="end">' + (churnCount ? num(t, 0) + "명" : (t * 100) + "%") + "</text>";
   });
-  s += '<text x="' + left + '" y="' + (rateTop - 12) + '" class="lbl">이탈률</text>';
+  s += '<text x="' + left + '" y="' + (rateTop - 12) + '" class="lbl">' + (churnCount ? "이탈 인원" : "이탈률") + "</text>";
   days.forEach((d, c) => {
     const gx = left + groupW * c + (groupW - (bw * 2 + gap)) / 2;
     SLOTS.forEach((slot, i) => {
@@ -524,9 +533,9 @@ function renderPhase() {
           esc(boxTip({ version: v.version }, label + (slot.night && raidOnly ? " (습격 중)" : ""), b, fmtMin)) + '"/>';
       }
       if (cell.reached) {
-        const r = cell.ended / cell.reached, h = rateH * r;
-        if (h > 0) s += '<path d="' + barUp(x, ry(r), bw, h) + '" fill="' + col + '"/>';
-        if (bw >= 18) s += '<text x="' + cx + '" y="' + (ry(r) - 4) + '" text-anchor="middle">' + num(r * 100, 0) + "%</text>";
+        const r = cell.ended / cell.reached, val = churnCount ? cell.ended : r, h = rateH * val / churnMax;
+        if (h > 0) s += '<path d="' + barUp(x, ry(val), bw, h) + '" fill="' + col + '"/>';
+        if (bw >= 18) s += '<text x="' + cx + '" y="' + (ry(val) - 4) + '" text-anchor="middle">' + (churnCount ? cell.ended : num(r * 100, 0) + "%") + "</text>";
         const lines = [v.version + " · " + label, "이탈률 " + pct(r), "도달 " + cell.reached + "명 · 이탈 " + cell.ended + "명"];
         if (slot.night) lines.push("  그중 습격 실패 직후 " + cell.afterFail + "명");
         lines.push("  그중 비정상 종료 " + cell.crash + "명");
@@ -647,8 +656,8 @@ function renderTutorial(vs) {
     const runs = runsOf(v).filter((t) => t.outcome !== "skipped");
     if (!runs.length) return null;
     const n = runs.filter((t) => t.steps.some((s) => keyOf(s) === key)).length;
-    return { value: n / runs.length, label: pct(n / runs.length, 0), tip: "도달 " + n + " / " + runs.length + "회 진행 (" + pct(n / runs.length) + ")" };
-  }, 1, false, 220);
+    return shareBar("funnel", n, runs.length, "회");
+  }, isCount("funnel") ? 0 : 1, false, 220);
   boxH($("c-steptime"), vs, keys, (v, key) => runsOf(v).flatMap((t) => t.steps.filter((s) => keyOf(s) === key && s.completed && s.duration != null).map((s) => s.duration)),
     (x) => num(x, 1) + "초");
 }
@@ -671,7 +680,7 @@ function renderRetry(vs) {
   stacked100($("c-retry"), vs, days, (v, d) => {
     const list = failed(v).filter((r) => r.day === d);
     return { yes: list.filter((r) => r[field]).length, total: list.length };
-  }, "재도전", "재도전 안 함");
+  }, "재도전", "재도전 안 함", "retry");
 }
 
 // 손님이 요구하면 그 특성의 총을 만들 수밖에 없어, 그 주문의 빌드는 해당 조건 달성에서 뺀다
@@ -685,13 +694,14 @@ function endgameWhy(parts, requests) {
   if (R.grav > 0 && p("중력") >= R.grav && !req.includes(ORDER_FORCED.grav)) out.push("grav");
   return out;
 }
-/** 일차(범주) × 비율 선 그래프. pointsOf(v) → [{ x: 일차, y: 0~1 또는 null, ... }]. */
-function dayLines(el, vs, days, pointsOf, tipOf) {
+/** 일차(범주) × 비율 선 그래프. pointsOf(v) → [{ x: 일차, y: 0~1 또는 null, ... }]. count면 y는 건수이고 축을 건수로 잡는다. */
+function dayLines(el, vs, days, pointsOf, tipOf, count) {
   const series = vs.map((v) => ({ v, pts: pointsOf(v).filter((p) => p.y != null) })).filter((s) => s.pts.length);
   if (!series.length || !days.length) { el.innerHTML = emptyBox("기록된 데이터가 없습니다."); return; }
   const W = widthOf(el), H = 250, left = 48, top = 10, bottom = 28, plotW = W - left - 16, plotH = H - top - bottom;
-  const step = plotW / days.length, sx = (d) => left + step * days.indexOf(d) + step / 2, sy = (y) => top + plotH - y * plotH;
-  let s = yAxis(W, top, plotH, left, 1, (x) => num(x * 100, 0) + "%");
+  const maxY = count ? countMax(Math.max(...series.flatMap((x) => x.pts.map((p) => p.y)))) : 1;
+  const step = plotW / days.length, sx = (d) => left + step * days.indexOf(d) + step / 2, sy = (y) => top + plotH - y / maxY * plotH;
+  let s = yAxis(W, top, plotH, left, maxY, count ? (x) => num(x, 0) + "명" : (x) => num(x * 100, 0) + "%");
   days.forEach((d) => { s += '<text x="' + sx(d) + '" y="' + (H - 8) + '" text-anchor="middle">' + esc(dayLabel(d)) + "</text>"; });
   series.forEach(({ v, pts }) => {
     s += '<polyline fill="none" stroke="' + color(v) + '" stroke-width="2" stroke-linejoin="round" points="' +
@@ -734,10 +744,11 @@ function renderEndgame(vs) {
       const hit = reached.filter((s) => first.has(s) && first.get(s).day <= day);
       const by = { main: 0, heat: 0, grav: 0 };
       hit.forEach((s) => first.get(s).why.forEach((w) => by[w]++));
-      return { x: day, y: reached.length ? hit.length / reached.length : null, hits: hit.length, n: reached.length, by };
+      const y = !reached.length ? null : isCount("endgame") ? hit.length : hit.length / reached.length;
+      return { x: day, y, rate: reached.length ? hit.length / reached.length : null, hits: hit.length, n: reached.length, by };
     });
-  }, (v, p) => v.version + " · " + dayLabel(p.x) + "\n달성 " + pct(p.y) + " (" + p.hits + " / " + p.n + "명)" +
-    (p.hits ? "\n처음 채운 조건: " + Object.keys(ENDGAME_NAMES).filter((k) => p.by[k]).map((k) => ENDGAME_NAMES[k] + " " + p.by[k] + "명").join(", ") : ""));
+  }, (v, p) => v.version + " · " + dayLabel(p.x) + "\n달성 " + pct(p.rate) + " (" + p.hits + " / " + p.n + "명)" +
+    (p.hits ? "\n처음 채운 조건: " + Object.keys(ENDGAME_NAMES).filter((k) => p.by[k]).map((k) => ENDGAME_NAMES[k] + " " + p.by[k] + "명").join(", ") : ""), isCount("endgame"));
 }
 
 function renderResponse(vs) {
@@ -816,11 +827,15 @@ function renderModules() {
   raids.forEach((r) => Object.keys(r.parts).forEach((m) => freq.set(m, (freq.get(m) || 0) + 1)));
   const mods = [...freq.keys()].sort((a, b) => freq.get(b) - freq.get(a) || a.localeCompare(b));
   const byDay = new Map(days.map((d) => [d, raids.filter((r) => r.day === d)]));
+  const usedOf = (i, j) => byDay.get(days[j]).filter((r) => part(r.parts, mods[i]) > 0).length;
+  const count = isCount("modules");
+  let maxUsed = 1;
+  mods.forEach((_, i) => days.forEach((_, j) => { maxUsed = Math.max(maxUsed, usedOf(i, j)); }));
   cellmap(el, mods, days.map(dayLabel), (i, j) => {
-    const list = byDay.get(days[j]), used = list.filter((r) => part(r.parts, mods[i]) > 0).length;
+    const list = byDay.get(days[j]), used = usedOf(i, j);
     if (!used) return null;
     const share = used / list.length;
-    return { t: share, text: num(share * 100, 0) + "%",
+    return { t: count ? used / maxUsed : share, text: count ? String(used) : num(share * 100, 0) + "%",
       tip: v.version + " · " + dayLabel(days[j]) + " · " + mods[i] + "\n" + pct(share) + " (" + used + " / " + list.length + "회 습격)" };
   }, "습격 일차", "");
 }
