@@ -167,7 +167,15 @@ internal sealed class InsightTracker
 
             case GameEvents.OrderCreated:
             case GameEvents.OrderRestored:
-                Order(orderId)?.SetNpc(Text(data, "profileId"));
+                if (Order(orderId) is { } placed)
+                {
+                    placed.SetNpc(Text(data, "profileId"));
+                    if (Strings(data, "requestIds") is { } requests)
+                    {
+                        placed.Requests = requests;
+                    }
+                }
+
                 break;
 
             case GameEvents.WorkbenchEnter:
@@ -202,6 +210,7 @@ internal sealed class InsightTracker
                 if (Today() is { } today)
                 {
                     today.Builds.Add(layout.PartCounts());
+                    today.BuildRequests.Add(order?.Requests ?? Array.Empty<string>());
                 }
 
                 break;
@@ -490,6 +499,11 @@ internal sealed class InsightTracker
             ? value.GetString()?.Trim() ?? string.Empty
             : string.Empty;
 
+    private static string[]? Strings(JsonElement data, string name) =>
+        data.ValueKind == JsonValueKind.Object && data.TryGetProperty(name, out JsonElement value) && value.ValueKind == JsonValueKind.Array
+            ? value.EnumerateArray().Where(x => x.ValueKind == JsonValueKind.String).Select(x => x.GetString() ?? string.Empty).ToArray()
+            : null;
+
     private static double? Number(JsonElement data, string name) =>
         data.ValueKind == JsonValueKind.Object && data.TryGetProperty(name, out JsonElement value)
         && value.ValueKind == JsonValueKind.Number && value.TryGetDouble(out double number) && double.IsFinite(number)
@@ -556,11 +570,13 @@ internal static class InsightPlayers
                     same.Priced += day.Priced;
                     same.Satisfied += day.Satisfied;
                     same.Builds.AddRange(day.Builds);
+                    same.BuildRequests.AddRange(day.BuildRequests);
                     continue;
                 }
 
                 InsightDay copy = day.ForSession(p);
                 copy.Builds = new List<Dictionary<string, int>>(day.Builds);
+                copy.BuildRequests = new List<string[]>(day.BuildRequests);
                 days[(p, day.Day)] = copy;
                 v.Days.Add(copy);
             }
@@ -868,6 +884,9 @@ public sealed class InsightDay
     public int Satisfied { get; set; }
     public List<Dictionary<string, int>> Builds { get; set; } = new();
 
+    /// <summary>Builds와 같은 순서로, 그 빌드를 만든 주문의 손님 요청 ID(order_created의 requestIds). 주문을 모르면 빈 배열.</summary>
+    public List<string[]> BuildRequests { get; set; } = new();
+
     [System.Text.Json.Serialization.JsonIgnore]
     internal string SaveId { get; set; } = string.Empty;
 
@@ -896,6 +915,10 @@ public sealed class InsightOrder
 
     [System.Text.Json.Serialization.JsonIgnore]
     internal string OrderId { get; set; } = string.Empty;
+
+    /// <summary>손님 요청 ID(order_created·order_restored의 requestIds). 예: tag/gravity-gun, module/penetration/min-1.</summary>
+    [System.Text.Json.Serialization.JsonIgnore]
+    internal string[] Requests { get; set; } = Array.Empty<string>();
 
     [System.Text.Json.Serialization.JsonIgnore]
     internal string SaveId { get; set; } = string.Empty;

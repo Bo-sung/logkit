@@ -166,8 +166,17 @@ public static class InsightsPage
 
   <section class="card">
     <div class="q">종결 총기가 2~3일차에 너무 일찍 완성되는가?</div>
-    <h3>종결 총기 달성 플레이어 비율</h3>
-    <p class="sub">그 일차까지 한 번이라도 기준을 채운 총을 만든 플레이어 / 그 일차에 도달한 플레이어 · 빌드(작업대 퇴장) 기준</p>
+    <div class="row" style="justify-content:space-between">
+      <h3>종결 총기 달성 플레이어 비율</h3>
+      <select id="endsource">
+        <option value="builds">공방 빌드 (손님이 요구한 특성 제외)</option>
+        <option value="allbuilds">공방 빌드 전체</option>
+        <option value="raids">습격에 들고 간 총</option>
+      </select>
+    </div>
+    <p class="sub">그 일차까지 한 번이라도 기준을 채운 총을 만든(들고 간) 플레이어 / 그 일차에 도달한 플레이어(낮·밤 구간 기준) ·
+      손님 주문이 화염방사기·중력총 태그를 요구했으면 그 주문의 빌드는 발열·중력 조건 달성으로 세지 않음(손님 요구로 만든 총이라서) ·
+      습격 총은 습격 시작 코드(새 빌드부터)라 이전 로그에는 거의 없음</p>
     <div class="rule" id="rule">
       <b>기준</b>
       관통 ≥ <input data-k="pen" type="number" min="0"> 그리고 폭발 ≥ <input data-k="exp" type="number" min="0">
@@ -247,6 +256,8 @@ public static class InsightsPage
            끝 기록 없이 끝난 진행은 마지막으로 시작한 단계에서 멈춘 것으로 봄
 수익       Shop / weapon_sold price 합 (+ 선택 시 습격 종료의 moduleCrateCredits + materialCrateCredits)
 조건 만족  Shop / weapon_sold satisfied = true 횟수
+종결 총기  공방 빌드: Shop / workbench_exited 코드의 파츠. 주문의 requestIds(order_created)에 tag/flamethrower·tag/gravity-gun이
+           있으면 그 빌드는 발열·중력 조건에서 뺌. 습격 총: NightRaid / 습격 시작 코드. 도달 = 그 일차 이후 낮·밤 구간 또는 상점 기록
 수정 횟수  같은 orderId의 workbench_exited 중 구성(weaponCode)이 직전과 달라진 횟수. 시험 사격 뒤 = 그 주문의 첫 attack_input 이후
 손님 ID    order_created / order_restored의 profileId → 게임 Assets/Resources/CustomerOrderData.json guests의 name
 체류 시간  같은 orderId의 workbench_entered → workbench_exited 시각 차 합계
@@ -663,11 +674,16 @@ function renderRetry(vs) {
   }, "재도전", "재도전 안 함");
 }
 
-function endgame(parts) {
-  const R = state.rule, p = (n) => part(parts, n);
-  const main = (R.pen || R.exp || R.spread || R.rate) &&
-    p("관통") >= R.pen && p("폭발") >= R.exp && p("방사") >= R.spread && p("연사") >= R.rate;
-  return !!main || (R.heat > 0 && p("발열") >= R.heat) || (R.grav > 0 && p("중력") >= R.grav);
+// 손님이 요구하면 그 특성의 총을 만들 수밖에 없어, 그 주문의 빌드는 해당 조건 달성에서 뺀다
+const ORDER_FORCED = { heat: "tag/flamethrower", grav: "tag/gravity-gun" };
+const ENDGAME_NAMES = { main: "관통·폭발 조합", heat: "발열", grav: "중력" };
+/** 종결 기준 중 이 총이 채운 조건 목록. requests = 그 빌드를 만든 주문의 손님 요청 ID(없으면 빼지 않음). */
+function endgameWhy(parts, requests) {
+  const R = state.rule, p = (n) => part(parts, n), req = requests || [], out = [];
+  if ((R.pen || R.exp || R.spread || R.rate) && p("관통") >= R.pen && p("폭발") >= R.exp && p("방사") >= R.spread && p("연사") >= R.rate) out.push("main");
+  if (R.heat > 0 && p("발열") >= R.heat && !req.includes(ORDER_FORCED.heat)) out.push("heat");
+  if (R.grav > 0 && p("중력") >= R.grav && !req.includes(ORDER_FORCED.grav)) out.push("grav");
+  return out;
 }
 /** 일차(범주) × 비율 선 그래프. pointsOf(v) → [{ x: 일차, y: 0~1 또는 null, ... }]. */
 function dayLines(el, vs, days, pointsOf, tipOf) {
@@ -689,22 +705,39 @@ function dayLines(el, vs, days, pointsOf, tipOf) {
 }
 
 function renderEndgame(vs) {
-  const days = daysOf(vs, (v) => v.days);
+  const source = $("endsource").value;
+  const days = daysOf(vs, (v) => v.phases.concat(v.days));
+  /** 플레이어별 [일차, 채운 조건] 목록. */
+  const hitsOf = (v) => {
+    const out = [];
+    if (source === "raids") {
+      v.raids.forEach((r) => { if (r.parts && r.day != null) out.push({ s: r.s, day: r.day, why: endgameWhy(r.parts) }); });
+    } else {
+      v.days.forEach((d) => d.builds.forEach((b, i) =>
+        out.push({ s: d.s, day: d.day, why: endgameWhy(b, source === "builds" ? (d.buildRequests || [])[i] : null) })));
+    }
+    return out.filter((h) => h.why.length);
+  };
   dayLines($("c-endgame"), vs, days, (v) => {
-    const bySession = new Map();
-    v.days.forEach((d) => { if (!bySession.has(d.s)) bySession.set(d.s, []); bySession.get(d.s).push(d); });
-    // 세션마다 처음 기준을 채운 일차
-    const firstHit = new Map();
-    bySession.forEach((list, s) => {
-      const hit = list.slice().sort((a, b) => a.day - b.day).find((d) => d.builds.some(endgame));
-      firstHit.set(s, hit ? hit.day : Infinity);
+    // 도달 = 그 일차 이후 구간(낮·밤) 또는 상점 기록이 있는 플레이어
+    const lastDay = new Map();
+    v.phases.concat(v.days).forEach((x) => lastDay.set(x.s, Math.max(lastDay.get(x.s) ?? -1, x.day)));
+    // 플레이어마다 처음 기준을 채운 일차와 그날 채운 조건
+    const first = new Map();
+    hitsOf(v).forEach((h) => {
+      const f = first.get(h.s);
+      if (!f || h.day < f.day) first.set(h.s, { day: h.day, why: new Set(h.why) });
+      else if (h.day === f.day) h.why.forEach((w) => f.why.add(w));
     });
     return days.map((day) => {
-      const reached = [...bySession.entries()].filter(([, list]) => list.some((d) => d.day >= day)).map(([s]) => s);
-      const hits = reached.filter((s) => firstHit.get(s) <= day).length;
-      return { x: day, y: reached.length ? hits / reached.length : null, hits, n: reached.length };
+      const reached = [...lastDay.entries()].filter(([, last]) => last >= day).map(([s]) => s);
+      const hit = reached.filter((s) => first.has(s) && first.get(s).day <= day);
+      const by = { main: 0, heat: 0, grav: 0 };
+      hit.forEach((s) => first.get(s).why.forEach((w) => by[w]++));
+      return { x: day, y: reached.length ? hit.length / reached.length : null, hits: hit.length, n: reached.length, by };
     });
-  }, (v, p) => v.version + " · " + dayLabel(p.x) + "\n달성 " + pct(p.y) + " (" + p.hits + " / " + p.n + "명)");
+  }, (v, p) => v.version + " · " + dayLabel(p.x) + "\n달성 " + pct(p.y) + " (" + p.hits + " / " + p.n + "명)" +
+    (p.hits ? "\n처음 채운 조건: " + Object.keys(ENDGAME_NAMES).filter((k) => p.by[k]).map((k) => ENDGAME_NAMES[k] + " " + p.by[k] + "명").join(", ") : ""));
 }
 
 function renderResponse(vs) {
@@ -846,7 +879,7 @@ document.querySelectorAll("#rule input").forEach((inp) => {
 $("withended").checked = !!loadPrefs().withended;
 $("withended").onchange = () => { savePrefs({ withended: $("withended").checked }); renderPhase(); };
 $("tutseq").onchange = () => { savePrefs({ tutseq: $("tutseq").value }); renderTutorial(selectedVersions()); };
-for (const id of ["modmetric", "retrymode", "revmode", "nightmode", "vaultmetric", "balmode"]) {
+for (const id of ["modmetric", "retrymode", "revmode", "nightmode", "vaultmetric", "balmode", "endsource"]) {
   const saved = loadPrefs()[id];
   if (saved && [...$(id).options].some((o) => o.value === saved)) $(id).value = saved;
   $(id).onchange = () => { savePrefs({ [id]: $(id).value }); render(); };
