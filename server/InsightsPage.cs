@@ -27,6 +27,10 @@ public static class InsightsPage
 .cells text { fill: var(--muted); font-size: 11px; font-variant-numeric: tabular-nums; }
 .cells text.lbl { fill: var(--text); }
 .ramp.rate { background: linear-gradient(90deg, #104281, #3987e5, #cde2fb); }
+.basever { display: inline-block; margin-left: 8px; padding: 0 7px; border: 1px solid var(--grid); border-radius: 10px;
+  font-size: 11px; font-weight: 400; color: var(--muted); vertical-align: middle; }
+.basever:empty { display: none; }
+.subhead { margin: 16px 0 4px; font-size: 12.5px; font-weight: 600; color: var(--text); }
 </style>
 </head>
 <body>
@@ -52,17 +56,21 @@ public static class InsightsPage
     </div>
     <div id="vchips" class="row"></div>
     <div class="row" style="margin-top:10px">
-      <span class="muted">단일 버전 차트(낮·밤, 히트맵)</span><select id="hver"></select>
-      <span class="muted">플레이어 = 세이브(saveId — 저장 불러오기로 이어 한 세션을 합침, saveId가 없는 이전 로그는 세션) · 일차 = 상점 이벤트의 day (0일차 = 튜토리얼) · 습격은 습격 시작의 day(없으면 직전 일차)</span>
+      <b>기준 버전</b><select id="hver"></select>
+      <span class="muted">버전 하나만 그리는 차트(일차 진행, 관통 × 폭발 성공률, 모듈 빈도)에 씁니다. 해당 차트 제목 옆에 표시됩니다.</span>
     </div>
+    <p class="sub" style="margin:8px 0 0">플레이어 = 세이브(saveId — 저장 불러오기로 이어 한 세션을 합침, saveId가 없는 이전 로그는 세션) ·
+      일차 = 상점 이벤트의 day (0일차 = 튜토리얼) · 습격은 습격 시작의 day(없으면 직전 일차)의 밤 · 1~6일차 고정, 7일차부터 무한 모드</p>
     <p class="sub" id="coverage" style="margin:6px 0 0"></p>
   </section>
 
+  <div class="section">일차 진행 (기준 버전)</div>
+
   <section class="card wide">
     <div class="row" style="justify-content:space-between">
-      <div><h3>n일차 낮·밤 플레이 타임과 이탈률</h3>
-        <p class="sub" style="margin:0">위: 구간 플레이 시간(일시정지 제외) · 아래: 같은 구간에서 세션이 끝난 플레이어 / 그 구간에 도달한 플레이어 ·
-          낮 = 그날 첫 상점 이벤트 → 첫 습격 시작, 밤 = 첫 습격 시작 → 다음 날 첫 상점 이벤트 · 단일 버전 기준</p></div>
+      <div><h3>n일차 낮·밤 플레이 타임과 이탈률<span class="basever"></span></h3>
+        <p class="sub" style="margin:0">위: 구간 플레이 시간(일시정지 제외) · 아래: 그 구간에서 끝난 플레이어 / 그 구간에 도달한 플레이어 ·
+          낮 = 그날 첫 상점 이벤트 → 첫 습격 시작, 밤 = 첫 습격 시작 → 다음 날 첫 상점 이벤트</p></div>
       <div class="row">
         <select id="nightmode">
           <option value="all">밤 = 밤 전체(재도전·선택 화면 포함)</option>
@@ -73,21 +81,28 @@ public static class InsightsPage
     </div>
     <div class="legend" style="margin-top:8px"><span><i style="background:#c98500"></i>낮</span><span><i style="background:#3987e5"></i>밤</span></div>
     <div id="c-phase" class="chart"></div>
-    <div class="row" style="justify-content:space-between;margin-top:16px">
-      <div class="muted" style="font-size:12px">n일차 낮·밤 보유 달러</div>
+    <p class="sub" style="margin:6px 0 0">이탈 = 플레이어의 마지막 구간(그 뒤로 같은 세이브의 기록이 없음). 저장을 불러와 이어 했으면 이탈이 아닙니다.
+      saveId가 없는 이전 로그는 세션이 끝난 구간을 이탈로 셉니다. 이탈 구간의 시간은 중간에 끊긴 값이라 기본으로 위 분포에서 뺍니다.</p>
+  </section>
+
+  <section class="card">
+    <div class="row" style="justify-content:space-between">
+      <div><h3>n일차 낮·밤 보유 달러<span class="basever"></span></h3>
+        <p class="sub" style="margin:0">플레이어-구간 1개 = 1 · 낮 = 영업 시작(shop_opened)의 잔액</p></div>
       <select id="balmode">
-        <option value="close">밤 = 그날 영업 종료 요청 때 잔액(수동 종료한 날만)</option>
+        <option value="close">밤 = 영업 종료 요청 때 잔액(수동 종료한 날만)</option>
         <option value="next">밤 = 다음 날 영업 시작 잔액(밤을 마친 뒤)</option>
       </select>
     </div>
-    <div id="c-balance" class="chart"></div>
-    <div class="muted" style="font-size:12px;margin:12px 0 4px">n일차 낮·밤 모듈 보유 개수</div>
+    <div id="c-balance" class="chart" style="margin-top:8px"></div>
+    <p class="sub" style="margin:6px 0 0">게임이 습격 전후 잔액을 남기지 않아 밤 값은 선택한 근삿값입니다. 습격 시작에 잔액이 기록되면 정확한 값으로 바꿉니다.</p>
+  </section>
+
+  <section class="card">
+    <h3>n일차 낮·밤 모듈 보유 개수<span class="basever"></span></h3>
+    <p class="sub">플레이어-구간 1개 = 1 · 기본 해금 12종 + 그때까지 습격 모듈 상자로 얻은 잠긴 모듈(차지·도탄·물·열·회전·유도·중력) 종류 수 ·
+      낮 = 전날 밤까지, 밤 = 그날 밤까지 · saveId가 없는 이전 로그는 세션 안에서만 셉니다</p>
     <div id="c-owned" class="chart"></div>
-    <p class="sub" style="margin:6px 0 0">달러: 낮 = 영업 시작(shop_opened)의 balance. 게임이 습격 전후 잔액을 남기지 않아 밤은 위 선택의 근삿값입니다.
-      모듈: 기본 해금 12종 + 그 구간까지 습격 모듈 상자로 얻은 서로 다른 모듈 수(습격 종료의 moduleCrateRewards, 낮 = 전날 밤까지, 밤 = 그날 밤까지).
-      saveId가 없는 이전 로그는 세션 안에서만 셉니다.</p>
-    <p class="sub" style="margin:6px 0 0">이탈 = 플레이어의 마지막 구간(그 뒤로 같은 세이브의 기록이 없음). 저장을 불러와 이어 했으면 이탈이 아닙니다. saveId가 없는 이전 로그는 세션이 끝난 구간을 이탈로 셉니다.
-      게임에 클리어가 없고 1~6일차가 고정 일차, 7일차부터 파산할 때까지 무한 모드입니다(무한 표시). 이탈 구간의 시간은 중간에 끊긴 값이라 기본으로 위 분포에서 뺍니다.</p>
   </section>
 
   <div class="section">가설 통계</div>
@@ -109,14 +124,17 @@ public static class InsightsPage
   <section class="card">
     <div class="q">튜토리얼 행동 가이드 상시 표시가 막힘을 줄이는가?</div>
     <div class="row" style="justify-content:space-between">
-      <h3>단계별 퍼널 · 단계 소요 시간</h3>
+      <h3>튜토리얼 진행</h3>
       <div class="row"><span class="muted">시퀀스</span><select id="tutseq"></select></div>
     </div>
-    <p class="sub">퍼널 = 그 단계를 시작한 진행 / 튜토리얼을 시작한 진행 · 소요 시간 = step_completed의 duration(실제 초) ·
-      에디터 단계 넘기기(debugSkipped)가 있는 진행과 건너뛰기는 퍼널에서 뺌 · 가이드 표시 정책 필드가 없어 정책 비교 대신 버전끼리 비교합니다.</p>
+    <p class="sub">에디터 단계 넘기기(debugSkipped)가 있는 진행은 뺌 · 가이드 표시 정책 필드가 없어 정책 비교 대신 버전끼리 비교합니다</p>
+    <div class="subhead">결과</div>
     <div id="t-tutorial"></div>
-    <div id="c-funnel" class="chart scroll" style="margin-top:8px"></div>
-    <div class="muted" style="font-size:12px;margin:10px 0 4px">단계 소요 시간</div>
+    <div class="subhead">단계별 퍼널</div>
+    <p class="sub">그 단계를 시작한 진행 / 튜토리얼을 시작한 진행 · 건너뛰기는 뺌</p>
+    <div id="c-funnel" class="chart scroll"></div>
+    <div class="subhead">단계 소요 시간</div>
+    <p class="sub">step_completed의 duration(실제 초)</p>
     <div id="c-steptime" class="chart scroll"></div>
   </section>
 
@@ -170,8 +188,8 @@ public static class InsightsPage
 
   <section class="card wide">
     <div class="q">관통·폭발 모듈 하향이 과도한 성능과 쏠림을 줄이는가?</div>
-    <h3>관통 × 폭발 모듈 수별 습격 성공률</h3>
-    <p class="sub">습격 총의 관통(가로)·폭발(세로) 모듈 개수 · 칸 색 = 습격 성공률, 숫자 = 습격 수 · 12개 이상은 한 칸 · 히트맵 버전 기준</p>
+    <h3>관통 × 폭발 모듈 수별 습격 성공률<span class="basever"></span></h3>
+    <p class="sub">습격 총의 관통(가로)·폭발(세로) 모듈 개수 · 칸 색 = 습격 성공률, 숫자 = 습격 수 · 12개 이상은 한 칸</p>
     <div class="row" style="margin:6px 0"><span class="muted">성공률 0%</span><span class="ramp rate"></span><span class="muted">100%</span></div>
     <div id="c-penexp" class="cells"></div>
   </section>
@@ -209,8 +227,8 @@ public static class InsightsPage
   </section>
 
   <section class="card wide">
-    <h3>일차별 야간 습격 총기 모듈 빈도</h3>
-    <p class="sub">그 모듈이 들어간 총으로 나간 습격 / 그날 밤 총을 확인한 습격 · 히트맵 버전 기준</p>
+    <h3>일차별 야간 습격 총기 모듈 빈도<span class="basever"></span></h3>
+    <p class="sub">그 모듈이 들어간 총으로 나간 습격 / 그날 밤 총을 확인한 습격</p>
     <div class="row" style="margin:6px 0"><span class="muted">적음</span><span class="ramp"></span><span class="muted">많음</span></div>
     <div id="c-modules" class="cells"></div>
   </section>
@@ -790,6 +808,12 @@ function renderHeatSelect(vs) {
   const known = (v) => v.raids.filter((r) => r.parts).length * 100000 + v.phases.length;
   if (vs.some((v) => v.version === prev)) sel.value = prev;
   else if (vs.length) sel.value = vs.reduce((a, b) => known(b) > known(a) ? b : a).version;
+  markBaseVersion();
+}
+/** 단일 버전 차트 제목 옆에 기준 버전을 적는다. */
+function markBaseVersion() {
+  const v = heatVersion();
+  document.querySelectorAll(".basever").forEach((el) => { el.textContent = v ? "기준 " + v.version : ""; });
 }
 
 function render() {
@@ -827,7 +851,7 @@ for (const id of ["modmetric", "retrymode", "revmode", "nightmode", "vaultmetric
   if (saved && [...$(id).options].some((o) => o.value === saved)) $(id).value = saved;
   $(id).onchange = () => { savePrefs({ [id]: $(id).value }); render(); };
 }
-$("hver").onchange = () => { savePrefs({ hver: $("hver").value }); renderPhase(); renderHoldings(); renderPenExp(); renderModules(); };
+$("hver").onchange = () => { savePrefs({ hver: $("hver").value }); markBaseVersion(); renderPhase(); renderHoldings(); renderPenExp(); renderModules(); };
 initPage();
 </script>
 </body>

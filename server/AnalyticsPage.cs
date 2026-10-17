@@ -71,13 +71,12 @@ public static class AnalyticsPage
   </section>
 
   <section class="card">
-    <h3>미수집 항목</h3>
-    <p class="sub">현재 로그에 없어 집계하지 않는 항목입니다. 추정값을 표시하지 않습니다.
-      공방의 총기 구성·파츠는 <a href="/weapons" style="color:var(--accent)">총기 통계</a>에서 봅니다.</p>
+    <h3>다른 페이지에서 보는 항목</h3>
+    <p class="sub">이 페이지는 판매·습격 결과를 버전별로 비교합니다. 아래 항목은 전용 페이지에서 봅니다.</p>
     <div class="missing">
-      <div><b>습격 중 휴대 총기</b>습격 시작에 총기 코드가 없음</div>
-      <div><b>실제 발사 수</b>attack_input은 발사 입력이며 성공 여부가 없음 · 야간은 미기록</div>
-      <div><b>위치별 사격</b>발사 이벤트에 위치·구역이 없음</div>
+      <div><b><a href="/weapons" style="color:var(--accent)">총기 통계</a></b>총기 구성·파츠, 습격 중 휴대 총(습격 시작 코드), 실제 발사 수와 발사 위치 히트맵</div>
+      <div><b><a href="/insights" style="color:var(--accent)">가설 통계</a></b>n일차 낮·밤 플레이 타임·이탈률·보유 달러·모듈 개수, 튜토리얼 퍼널, 재도전, 종결 총기</div>
+      <div><b>시험 사격</b>attack_input은 발사 입력(누를 때 1회)이며 발사 성공 여부는 아님</div>
     </div>
   </section>
 
