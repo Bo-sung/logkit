@@ -73,6 +73,19 @@ public static class InsightsPage
     </div>
     <div class="legend" style="margin-top:8px"><span><i style="background:#c98500"></i>낮</span><span><i style="background:#3987e5"></i>밤</span></div>
     <div id="c-phase" class="chart"></div>
+    <div class="row" style="justify-content:space-between;margin-top:16px">
+      <div class="muted" style="font-size:12px">n일차 낮·밤 보유 달러</div>
+      <select id="balmode">
+        <option value="close">밤 = 그날 영업 종료 요청 때 잔액(수동 종료한 날만)</option>
+        <option value="next">밤 = 다음 날 영업 시작 잔액(밤을 마친 뒤)</option>
+      </select>
+    </div>
+    <div id="c-balance" class="chart"></div>
+    <div class="muted" style="font-size:12px;margin:12px 0 4px">n일차 낮·밤 모듈 보유 개수</div>
+    <div id="c-owned" class="chart"></div>
+    <p class="sub" style="margin:6px 0 0">달러: 낮 = 영업 시작(shop_opened)의 balance. 게임이 습격 전후 잔액을 남기지 않아 밤은 위 선택의 근삿값입니다.
+      모듈: 기본 해금 12종 + 그 구간까지 습격 모듈 상자로 얻은 서로 다른 모듈 수(습격 종료의 moduleCrateRewards, 낮 = 전날 밤까지, 밤 = 그날 밤까지).
+      saveId가 없는 이전 로그는 세션 안에서만 셉니다.</p>
     <p class="sub" style="margin:6px 0 0">이탈 = 플레이어의 마지막 구간(그 뒤로 같은 세이브의 기록이 없음). 저장을 불러와 이어 했으면 이탈이 아닙니다. saveId가 없는 이전 로그는 세션이 끝난 구간을 이탈로 셉니다.
       게임에 클리어가 없고 1~6일차가 고정 일차, 7일차부터 파산할 때까지 무한 모드입니다(무한 표시). 이탈 구간의 시간은 중간에 끊긴 값이라 기본으로 위 분포에서 뺍니다.</p>
   </section>
@@ -246,6 +259,7 @@ state.rule = Object.assign({}, RULE_DEFAULT, loadPrefs().rule || {});
 // 무한 모드 시작 일차: 게임 DayManager의 고정 일차 목록(customerDays)이 1~6일차라 7일차부터다(Game / endless_started).
 const ENDLESS_FROM = 7;
 const dayLabel = (d) => d + "일차" + (d >= ENDLESS_FROM ? "·무한" : "");
+const money = (x) => "$" + num(x, 0);
 const part = (parts, name) => (parts && parts[name]) || 0;
 const stageName = (scene) => (state.data.stages.find((s) => s.scene === scene) || {}).name || scene;
 const stageVaultLabel = (scene) => {
@@ -497,6 +511,67 @@ function renderPhase() {
   el.innerHTML = '<svg viewBox="0 0 ' + W + " " + H + '">' + s + "</svg>";
 }
 
+/** 단일 버전 n일차 낮·밤 박스플롯. valuesOf(day, night) → 숫자 배열. */
+function dayNightBox(el, v, days, valuesOf, fmt) {
+  const cells = days.map((d) => SLOTS.map((slot) => boxStats(valuesOf(d, slot.night))));
+  if (!cells.flat().some(Boolean)) { el.innerHTML = emptyBox(v.version + " — 기록된 데이터가 없습니다."); return; }
+  let min = 0, max = 0;
+  cells.flat().forEach((b) => { if (b) { min = Math.min(min, b.lo, ...b.out); max = Math.max(max, b.hi, ...b.out); } });
+  const tk = ticks(min, Math.max(min + 1, max)); min = tk[0]; max = tk[tk.length - 1];
+  const W = widthOf(el), left = 64, right = 8, top = 10, plotH = 220, H = top + plotH + 28, plotW = W - left - right;
+  const sy = (y) => top + plotH - (y - min) / (max - min) * plotH;
+  const groupW = plotW / days.length, bw = Math.max(6, Math.min(30, groupW * 0.32)), gap = 4;
+  let s = "";
+  tk.forEach((t) => {
+    s += '<line x1="' + left + '" x2="' + (W - right) + '" y1="' + sy(t) + '" y2="' + sy(t) + '" stroke="' + (t === 0 ? "var(--axis)" : "var(--grid)") + '"/>';
+    s += '<text x="' + (left - 6) + '" y="' + (sy(t) + 4) + '" text-anchor="end">' + esc(fmt(t)) + "</text>";
+  });
+  days.forEach((d, c) => {
+    const gx = left + groupW * c + (groupW - (bw * 2 + gap)) / 2;
+    SLOTS.forEach((slot, i) => {
+      const b = cells[c][i], x = gx + i * (bw + gap), cx = x + bw / 2, col = slot.color;
+      if (!b) return;
+      s += '<line x1="' + cx + '" x2="' + cx + '" y1="' + sy(b.hi) + '" y2="' + sy(b.lo) + '" stroke="' + col + '" stroke-width="1.5"/>';
+      s += '<rect x="' + x + '" y="' + sy(b.q3) + '" width="' + bw + '" height="' + Math.max(1, sy(b.q1) - sy(b.q3)) +
+        '" rx="2" fill="' + col + '" fill-opacity="0.35" stroke="' + col + '" stroke-width="1.5"/>';
+      s += '<line x1="' + x + '" x2="' + (x + bw) + '" y1="' + sy(b.med) + '" y2="' + sy(b.med) + '" stroke="var(--text)" stroke-width="2"/>';
+      b.out.forEach((o) => { s += '<circle cx="' + cx + '" cy="' + sy(o) + '" r="2.5" fill="' + col + '"/>'; });
+      s += '<rect x="' + (x - gap / 2) + '" y="' + top + '" width="' + (bw + gap) + '" height="' + plotH + '" fill="transparent" data-tip="' +
+        esc(boxTip({ version: v.version }, dayLabel(d) + " " + slot.name, b, fmt)) + '"/>';
+    });
+    s += '<text x="' + (left + groupW * c + groupW / 2) + '" y="' + (H - 8) + '" text-anchor="middle">' + esc(dayLabel(d)) + "</text>";
+  });
+  el.innerHTML = '<div class="legend"><span><i style="background:#c98500"></i>낮</span><span><i style="background:#3987e5"></i>밤</span></div>' +
+    '<svg viewBox="0 0 ' + W + " " + H + '">' + s + "</svg>";
+}
+
+// 기본 해금 모듈 수: 게임 Data/Modules의 initiallyLocked = 0인 모듈(19종 중 12종).
+// 잠긴 모듈은 ModuleCatalog ID 10~16(차지·도탄·물·열·회전·유도·중력)이고 모듈 상자로만 해금된다.
+const BASE_MODULES = 12, LOCKED_MODULES = new Set([10, 11, 12, 13, 14, 15, 16]);
+function renderHoldings() {
+  const v = heatVersion();
+  if (!v) { $("c-balance").innerHTML = $("c-owned").innerHTML = emptyBox("버전을 선택하세요."); return; }
+  const days = [...new Set(v.phases.map((p) => p.day))].sort((a, b) => a - b);
+  const next = $("balmode").value === "next";
+  const dayBalance = new Map(v.phases.filter((p) => !p.night && p.balance != null).map((p) => [p.s + ":" + p.day, p.balance]));
+  dayNightBox($("c-balance"), v, days, (d, night) => v.phases.filter((p) => p.day === d && p.night === night)
+    .map((p) => night && next ? dayBalance.get(p.s + ":" + (d + 1)) : p.balance).filter((x) => x != null), money);
+  // 플레이어별 습격 보상 모듈(일차를 아는 습격만)
+  const rewards = new Map();
+  v.raids.forEach((r) => {
+    if (r.day == null || !r.rewards) return;
+    if (!rewards.has(r.s)) rewards.set(r.s, []);
+    rewards.get(r.s).push(r);
+  });
+  const owned = (s, d, night) => {
+    const set = new Set();
+    (rewards.get(s) || []).forEach((r) => { if (night ? r.day <= d : r.day < d) r.rewards.forEach((m) => { if (LOCKED_MODULES.has(m)) set.add(m); }); });
+    return BASE_MODULES + set.size;
+  };
+  dayNightBox($("c-owned"), v, days, (d, night) => [...new Set(v.phases.filter((p) => p.day === d && p.night === night).map((p) => p.s))]
+    .map((s) => owned(s, d, night)), (x) => num(x, 0) + "종");
+}
+
 // ─── 가설 통계 ───
 function renderVault(vs) {
   const stat = $("vaultmetric").value === "stat";
@@ -670,7 +745,6 @@ function renderGeneral(vs) {
     return m;
   };
   const creditCache = new Map(vs.map((v) => [v.version, credits(v)]));
-  const money = (x) => "$" + num(x, 0);
   boxV($("c-revenue"), vs, days, (v, d) => v.days.filter((x) => x.day === d)
     .map((x) => x.salesSum + (withRaid ? creditCache.get(v.version).get(x.s + ":" + x.day) || 0 : 0)), money, dayLabel);
   boxV($("c-satisfied"), vs, days, (v, d) => v.days.filter((x) => x.day === d).map((x) => x.satisfied), (x) => num(x, 1) + "회", dayLabel);
@@ -724,6 +798,7 @@ function render() {
   renderHeatSelect(vs);
   renderCoverage(vs);
   renderPhase();
+  renderHoldings();
   renderVault(vs);
   renderTutorial(vs);
   renderNpc(vs);
@@ -747,12 +822,12 @@ document.querySelectorAll("#rule input").forEach((inp) => {
 $("withended").checked = !!loadPrefs().withended;
 $("withended").onchange = () => { savePrefs({ withended: $("withended").checked }); renderPhase(); };
 $("tutseq").onchange = () => { savePrefs({ tutseq: $("tutseq").value }); renderTutorial(selectedVersions()); };
-for (const id of ["modmetric", "retrymode", "revmode", "nightmode", "vaultmetric"]) {
+for (const id of ["modmetric", "retrymode", "revmode", "nightmode", "vaultmetric", "balmode"]) {
   const saved = loadPrefs()[id];
   if (saved && [...$(id).options].some((o) => o.value === saved)) $(id).value = saved;
   $(id).onchange = () => { savePrefs({ [id]: $(id).value }); render(); };
 }
-$("hver").onchange = () => { savePrefs({ hver: $("hver").value }); renderPhase(); renderPenExp(); renderModules(); };
+$("hver").onchange = () => { savePrefs({ hver: $("hver").value }); renderPhase(); renderHoldings(); renderPenExp(); renderModules(); };
 initPage();
 </script>
 </body>

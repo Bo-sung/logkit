@@ -116,6 +116,9 @@ public sealed class TimelinePoint
 public sealed class Heatmap
 {
     public string StageId { get; set; } = string.Empty;
+
+    /// <summary>습격 일차(습격 시작의 day, 없으면 직전 상점 일차). null이면 전체 일차 합계다. 플레이어 위치 히트맵만 일차별로 나눈다.</summary>
+    public int? Day { get; set; }
     public double MinX { get; set; }
     public double MaxX { get; set; }
     public double MinZ { get; set; }

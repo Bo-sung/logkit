@@ -30,6 +30,7 @@ internal sealed class InsightTracker
     private DateTime _lastAt;
     private string _saveId = string.Empty;
     private InsightTutorial? _tutorial;
+    private (int Day, double Balance)? _closeBalance;
 
     public InsightTracker(InsightDigest digest)
     {
@@ -148,6 +149,22 @@ internal sealed class InsightTracker
         string orderId = Text(data, "orderId");
         switch (name)
         {
+            case GameEvents.ShopOpened:
+                if (_phase is { Night: false } && Number(data, "balance") is double opened)
+                {
+                    _phase.Balance ??= opened;
+                }
+
+                break;
+
+            case GameEvents.ShopCloseRequested:
+                if (_day is int closedDay && Number(data, "balance") is double closed)
+                {
+                    _closeBalance = (closedDay, closed);
+                }
+
+                break;
+
             case GameEvents.OrderCreated:
             case GameEvents.OrderRestored:
                 Order(orderId)?.SetNpc(Text(data, "profileId"));
@@ -310,6 +327,15 @@ internal sealed class InsightTracker
         }
 
         _raid.Survived = Bool(data, "survived");
+        if (data.ValueKind == JsonValueKind.Object && data.TryGetProperty("moduleCrateRewards", out JsonElement rewards)
+            && rewards.ValueKind == JsonValueKind.Array)
+        {
+            _raid.Rewards = rewards.EnumerateArray()
+                .Where(x => x.ValueKind == JsonValueKind.Number && x.TryGetInt32(out _))
+                .Select(x => x.GetInt32())
+                .ToList();
+        }
+
         double? module = Number(data, "moduleCrateCredits"), material = Number(data, "materialCrateCredits");
         _raid.Credits = module.HasValue || material.HasValue ? (module ?? 0) + (material ?? 0) : null;
         FinishRaid();
@@ -373,6 +399,11 @@ internal sealed class InsightTracker
     {
         ClosePhase(at);
         _phase = new InsightPhase { Day = day, Night = night, SaveId = _saveId };
+        if (night && _closeBalance is { } close && close.Day == day)
+        {
+            _phase.Balance = close.Balance;
+        }
+
         _phaseStart = at;
         _phasePaused = 0;
     }
@@ -562,6 +593,7 @@ internal static class InsightPlayers
                         : null;
                     previous.LastRaid = phase.LastRaid.Length > 0 ? phase.LastRaid : previous.LastRaid;
                     previous.Bankrupt |= phase.Bankrupt;
+                    previous.Balance ??= phase.Balance;
                     previous.CleanEnd = clean;
                     continue;
                 }
@@ -809,6 +841,9 @@ public sealed class InsightPhase
     /// <summary>이 구간에서 파산(Game / bankrupt)했으면 true.</summary>
     public bool Bankrupt { get; set; }
 
+    /// <summary>잔액. 낮 = 영업 시작(shop_opened) 때, 밤 = 그날 수동 영업 종료(shop_close_requested) 때. 기록이 없으면 null.</summary>
+    public double? Balance { get; set; }
+
     [System.Text.Json.Serialization.JsonIgnore]
     internal string SaveId { get; set; } = string.Empty;
 
@@ -919,6 +954,9 @@ public sealed class InsightRaid
     /// <summary>습격 시작에 기록된 총의 관통·폭발 수치(총구 중 최댓값, 방사 절반 반영). 이후 빌드부터.</summary>
     public double? Penetration { get; set; }
     public double? Explosion { get; set; }
+
+    /// <summary>습격 종료의 moduleCrateRewards(그 습격에서 모듈 상자로 얻은 모듈 ID). 종료 기록이 없으면 null.</summary>
+    public List<int>? Rewards { get; set; }
 
     [System.Text.Json.Serialization.JsonIgnore]
     internal string SaveId { get; set; } = string.Empty;

@@ -29,6 +29,8 @@ internal static class GameEvents
     public const string OrderCreated = "order_created";       // profileId, requestIds
     public const string OrderRestored = "order_restored";     // profileId, requestIds (저장 불러오기로 되살린 주문)
     public const string OrderCompleted = "order_completed";   // success, customerDead
+    public const string ShopOpened = "shop_opened";           // balance — 영업 시작 때 잔액
+    public const string ShopCloseRequested = "shop_close_requested"; // balance — 수동 영업 종료 때 잔액
     public const string WeaponFired = "weapon_fired";         // time, position, weaponAssemblyId (Shop: 공방 주간, NightRaid: 습격 중)
     public const string RaidWeaponConfig = "raid_weapon_config"; // time, weaponCode, weaponAssemblyId — 습격 중 처음 쓰는 구성
 
@@ -250,6 +252,7 @@ public sealed class GameAnalytics
         InsightTracker insights = new(d.Insights);
         (DateTime At, string Scene)? openWorkbench = null;
         RaidDigest? raid = null;
+        int? shopDay = null;
 
         void EnterWorkbench(DateTime at, string scene)
         {
@@ -282,6 +285,11 @@ public sealed class GameAnalytics
             {
                 JsonElement shop = ParseData(entry.DataJson);
                 insights.Shop(at, name, shop);
+                if (ReadDouble(shop, "day") is double day && day >= 0 && day < 1000)
+                {
+                    shopDay = (int)day;
+                }
+
                 switch (name)
                 {
                     case GameEvents.Sale:
@@ -336,7 +344,13 @@ public sealed class GameAnalytics
                 JsonElement data = ParseData(entry.DataJson);
                 if (name == GameEvents.RaidStart)
                 {
-                    raid = new RaidDigest { HasStart = true, Scene = ReadString(data, "scene") };
+                    // 습격 일차: 습격 시작의 day(출발한 공방 일차), 없으면 직전 상점 이벤트의 일차
+                    raid = new RaidDigest
+                    {
+                        HasStart = true,
+                        Scene = ReadString(data, "scene"),
+                        Day = ReadDouble(data, "day") is double startDay && startDay >= 0 ? (int)startDay : shopDay,
+                    };
                     d.Raids.Add(raid);
                     insights.RaidStart(at, raid.Scene, data);
                 }
@@ -345,7 +359,7 @@ public sealed class GameAnalytics
                     insights.RaidEvent(entry.Scene, name, data);
                     if (raid == null)
                     {
-                        raid = new RaidDigest();
+                        raid = new RaidDigest { Day = shopDay };
                         d.Raids.Add(raid);
                     }
                 }
@@ -513,7 +527,7 @@ public sealed class GameAnalytics
         Dictionary<string, StageAccumulator> stages = new(StringComparer.Ordinal);
         Dictionary<string, int> moduleRewards = new(StringComparer.Ordinal);
         TimelineAccumulator?[] timeline = new TimelineAccumulator?[MAX_TIMELINE_BINS];
-        Dictionary<string, int[]> heat = new(StringComparer.Ordinal);
+        Dictionary<(string Scene, int? Day), int[]> heat = new();
         List<RaidDigest> raids = new();
         int satisfied = 0, withSatisfied = 0;
         DateTime? first = null, last = null;
@@ -573,16 +587,20 @@ public sealed class GameAnalytics
 
             if (raid.Points.Count > 0)
             {
+                // 전체 일차 합계(Day = null)와, 일차를 아는 습격은 그 일차 격자에도 더한다
                 HeatmapBounds b = bounds[raid.Scene];
-                if (!heat.TryGetValue(raid.Scene, out int[]? cells))
+                foreach (int? key in raid.Day.HasValue ? new int?[] { null, raid.Day } : new int?[] { null })
                 {
-                    cells = new int[HEATMAP_GRID * HEATMAP_GRID];
-                    heat[raid.Scene] = cells;
-                }
+                    if (!heat.TryGetValue((raid.Scene, key), out int[]? cells))
+                    {
+                        cells = new int[HEATMAP_GRID * HEATMAP_GRID];
+                        heat[(raid.Scene, key)] = cells;
+                    }
 
-                for (int i = 0; i + 1 < raid.Points.Count; i += 2)
-                {
-                    cells[b.Row(raid.Points[i + 1], HEATMAP_GRID) * HEATMAP_GRID + b.Col(raid.Points[i], HEATMAP_GRID)]++;
+                    for (int i = 0; i + 1 < raid.Points.Count; i += 2)
+                    {
+                        cells[b.Row(raid.Points[i + 1], HEATMAP_GRID) * HEATMAP_GRID + b.Col(raid.Points[i], HEATMAP_GRID)]++;
+                    }
                 }
             }
         }
@@ -624,12 +642,14 @@ public sealed class GameAnalytics
             }
         }
 
-        foreach (KeyValuePair<string, int[]> pair in heat.OrderBy(p => p.Key, StringComparer.Ordinal))
+        foreach (KeyValuePair<(string Scene, int? Day), int[]> pair in heat
+            .OrderBy(p => p.Key.Scene, StringComparer.Ordinal).ThenBy(p => p.Key.Day ?? -1))
         {
-            HeatmapBounds b = bounds[pair.Key];
+            HeatmapBounds b = bounds[pair.Key.Scene];
             v.Heatmaps.Add(new Heatmap
             {
-                StageId = pair.Key,
+                StageId = pair.Key.Scene,
+                Day = pair.Key.Day,
                 MinX = b.MinX,
                 MaxX = b.MaxX,
                 MinZ = b.MinZ,
@@ -1262,6 +1282,7 @@ internal sealed class RaidDigest
 {
     public bool HasStart;
     public string Scene = string.Empty;
+    public int? Day;
     public bool Ended;
     public bool? Survived;
     public double? Duration;

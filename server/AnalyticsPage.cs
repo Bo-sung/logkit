@@ -121,8 +121,10 @@ public static class AnalyticsPage
   <section class="card wide">
     <div class="row" style="justify-content:space-between">
       <div><h3>플레이어 위치 히트맵</h3>
-        <p class="sub" style="margin:0">플레이어 상태 position의 X·Z 밀도 · 동일 축척 · 버전 내 비율, 제곱근 스케일 · 위쪽이 +Z · 지형 데이터 없음</p></div>
+        <p class="sub" style="margin:0">플레이어 상태 position의 X·Z 밀도 · 동일 축척 · 버전 내 비율, 제곱근 스케일 · 위쪽이 +Z · 지형 데이터 없음 ·
+          일차 = 습격 시작의 day(없으면 직전 상점 일차, 0일차 = 튜토리얼 훈련)</p></div>
       <div class="row"><span class="muted">스테이지</span><select id="stage"></select>
+        <span class="muted">일차</span><select id="heatday"></select>
         <span class="muted">적음</span><span class="ramp"></span><span class="muted">많음</span></div>
     </div>
     <div id="heat" class="heatgrid" style="margin-top:10px"></div>
@@ -291,8 +293,18 @@ function renderHeat(vs) {
   if (stages.includes(prev)) sel.value = prev;
   const stage = sel.value;
   const box = $("heat");
-  if (!stage) { box.innerHTML = emptyBox("플레이어 상태 위치 표본이 없습니다."); return; }
-  const maps = vs.map((v) => ({ v, h: v.heatmaps.find((x) => x.stageId === stage) }));
+  if (!stage) { box.innerHTML = emptyBox("플레이어 상태 위치 표본이 없습니다."); $("heatday").innerHTML = ""; return; }
+  // 일차: 전체 합계 / 일차별로 나눠 보기(일차 × 버전) / 한 일차
+  const days = [...new Set(vs.flatMap((v) => v.heatmaps.filter((h) => h.stageId === stage && h.day != null).map((h) => h.day)))].sort((a, b) => a - b);
+  const daySel = $("heatday"), prevDay = daySel.value;
+  daySel.innerHTML = '<option value="all">전체 일차</option><option value="split">일차별로 나눠 보기</option>' +
+    days.map((d) => '<option value="' + d + '">' + d + "일차</option>").join("");
+  if ([...daySel.options].some((o) => o.value === prevDay)) daySel.value = prevDay;
+  const mode = daySel.value;
+  const find = (v, day) => v.heatmaps.find((x) => x.stageId === stage && (day == null ? x.day == null : x.day === day));
+  const maps = mode === "split" ? days.flatMap((d) => vs.map((v) => ({ v, d, h: find(v, d) }))).filter((m) => m.h)
+    : vs.map((v) => ({ v, d: mode === "all" ? null : Number(mode), h: find(v, mode === "all" ? null : Number(mode)) }));
+  if (mode === "split" && !days.length) { box.innerHTML = emptyBox("일차가 기록된 습격이 없습니다."); return; }
   let maxShare = 0;
   maps.forEach(({ h }) => {
     if (!h) return;
@@ -300,9 +312,10 @@ function renderHeat(vs) {
     h.cells.forEach((c) => { if (h._total) maxShare = Math.max(maxShare, c / h._total); });
   });
   box.innerHTML = "";
-  for (const { v, h } of maps) {
+  for (const { v, d, h } of maps) {
     const wrap = document.createElement("div");
     wrap.innerHTML = '<div class="cap"><span class="sw" style="background:' + color(v) + '"></span>' + esc(v.version) +
+      (d != null ? '<span style="margin-left:6px">' + d + "일차</span>" : "") +
       '<span class="muted" style="margin-left:6px">' + (h ? num(h._total, 0) + " 표본" : "표본 없음") + "</span></div>";
     if (h) {
       const cv = document.createElement("canvas");
@@ -341,6 +354,7 @@ function render() {
 
 $("tlmetric").onchange = render;
 $("stage").onchange = () => renderHeat(selectedVersions());
+$("heatday").onchange = () => renderHeat(selectedVersions());
 initPage();
 </script>
 </body>
