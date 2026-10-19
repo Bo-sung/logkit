@@ -68,14 +68,18 @@ public static class InsightsPage
     <p class="sub" id="coverage" style="margin:6px 0 0"></p>
   </section>
 
-  <div class="section">일차 진행 (기준 버전)</div>
+  <div class="section">일차 진행</div>
 
   <section class="card wide">
     <div class="row" style="justify-content:space-between">
-      <div><h3>n일차 낮·밤 플레이 타임과 이탈률<span class="basever"></span><span class="unitsw" data-unit="churn"></span></h3>
+      <div><h3>n일차 낮·밤 플레이 타임과 이탈률<span class="basever" id="phasebase"></span><span class="unitsw" data-unit="churn"></span></h3>
         <p class="sub" style="margin:0">위: 구간 플레이 시간(일시정지 제외) · 아래: 그 구간에서 끝난 플레이어 / 그 구간에 도달한 플레이어 ·
           낮 = 그날 첫 상점 이벤트 → 첫 습격 시작, 밤 = 첫 습격 시작 → 다음 날 첫 상점 이벤트</p></div>
       <div class="row">
+        <select id="phasemode">
+          <option value="compare">선택한 버전 비교</option>
+          <option value="base">기준 버전만(낮·밤 색)</option>
+        </select>
         <select id="nightmode">
           <option value="all">밤 = 밤 전체(재도전·선택 화면 포함)</option>
           <option value="raid">밤 = 습격 중 시간만</option>
@@ -83,7 +87,7 @@ public static class InsightsPage
         <label class="chk"><input type="checkbox" id="withended"> 이탈 구간 시간도 포함</label>
       </div>
     </div>
-    <div class="legend" style="margin-top:8px"><span><i style="background:#c98500"></i>낮</span><span><i style="background:#3987e5"></i>밤</span></div>
+    <div class="legend" id="phaselegend" style="margin-top:8px"></div>
     <div id="c-phase" class="chart"></div>
     <p class="sub" style="margin:6px 0 0">이탈 = 플레이어의 마지막 구간(그 뒤로 같은 세이브의 기록이 없음). 저장을 불러와 이어 했으면 이탈이 아닙니다.
       saveId가 없는 이전 로그는 세션이 끝난 구간을 이탈로 셉니다. 이탈 구간의 시간은 중간에 끊긴 값이라 기본으로 위 분포에서 뺍니다.</p>
@@ -730,25 +734,39 @@ function heatVersion() {
 
 // ─── 낮·밤 플레이 타임과 이탈 ───
 const SLOTS = [{ night: false, name: "낮", color: "#c98500" }, { night: true, name: "밤", color: "#3987e5" }];
+/** 버전 v의 n일차 낮 또는 밤 구간 집계(플레이 시간 박스, 도달·이탈 인원과 이탈 사유). */
+function phaseCell(v, d, night, raidOnly, withEnded) {
+  const timeOf = (p) => p.night && raidOnly ? p.raidSeconds : p.seconds;
+  const list = v.phases.filter((p) => p.day === d && p.night === night);
+  const ended = list.filter((p) => p.ended);
+  return {
+    box: boxStats(list.filter((p) => withEnded || !p.ended).map(timeOf).filter((x) => x != null).map((x) => x / 60)),
+    reached: new Set(list.map((p) => p.s)).size,
+    ended: new Set(ended.map((p) => p.s)).size,
+    afterFail: ended.filter((p) => p.lastRaid === "fail").length,
+    crash: ended.filter((p) => !p.cleanEnd).length,
+    bankrupt: ended.filter((p) => p.bankrupt).length,
+  };
+}
+function phaseTipLines(version, label, cell, night) {
+  const lines = [version + " · " + label, "이탈률 " + pct(cell.ended / cell.reached), "도달 " + cell.reached + "명 · 이탈 " + cell.ended + "명"];
+  if (night) lines.push("  그중 습격 실패 직후 " + cell.afterFail + "명");
+  lines.push("  그중 비정상 종료 " + cell.crash + "명");
+  lines.push("  그중 파산 " + cell.bankrupt + "명");
+  return lines;
+}
+
 function renderPhase() {
+  const compare = $("phasemode").value === "compare";
+  $("phasebase").style.display = compare ? "none" : "";
+  if (compare) { renderPhaseCompare(selectedVersions()); return; }
+  $("phaselegend").innerHTML = SLOTS.map((slot) => '<span><i style="background:' + slot.color + '"></i>' + slot.name + "</span>").join("");
   const el = $("c-phase"), v = heatVersion();
   if (!v) { el.innerHTML = emptyBox("버전을 선택하세요."); return; }
   if (!v.phases.length) { el.innerHTML = emptyBox(v.version + " — 일차 기록이 없습니다."); return; }
   const raidOnly = $("nightmode").value === "raid", withEnded = $("withended").checked;
   const days = [...new Set(v.phases.map((p) => p.day))].sort((a, b) => a - b);
-  const timeOf = (p) => p.night && raidOnly ? p.raidSeconds : p.seconds;
-  const cells = days.map((d) => SLOTS.map((slot) => {
-    const list = v.phases.filter((p) => p.day === d && p.night === slot.night);
-    const ended = list.filter((p) => p.ended);
-    return {
-      box: boxStats(list.filter((p) => withEnded || !p.ended).map(timeOf).filter((x) => x != null).map((x) => x / 60)),
-      reached: new Set(list.map((p) => p.s)).size,
-      ended: new Set(ended.map((p) => p.s)).size,
-      afterFail: ended.filter((p) => p.lastRaid === "fail").length,
-      crash: ended.filter((p) => !p.cleanEnd).length,
-      bankrupt: ended.filter((p) => p.bankrupt).length,
-    };
-  }));
+  const cells = days.map((d) => SLOTS.map((slot) => phaseCell(v, d, slot.night, raidOnly, withEnded)));
   let max = 0;
   cells.flat().forEach((c) => { if (c.box) max = Math.max(max, c.box.hi, ...c.box.out); });
   const tk = ticks(0, Math.max(1, max)), maxY = tk[tk.length - 1];
@@ -790,13 +808,75 @@ function renderPhase() {
         const r = cell.ended / cell.reached, val = churnCount ? cell.ended : r, h = rateH * val / churnMax;
         if (h > 0) s += '<path d="' + barUp(x, ry(val), bw, h) + '" fill="' + col + '"/>';
         if (bw >= 18) s += '<text x="' + cx + '" y="' + (ry(val) - 4) + '" text-anchor="middle">' + (churnCount ? cell.ended : num(r * 100, 0) + "%") + "</text>";
-        const lines = [v.version + " · " + label, "이탈률 " + pct(r), "도달 " + cell.reached + "명 · 이탈 " + cell.ended + "명"];
-        if (slot.night) lines.push("  그중 습격 실패 직후 " + cell.afterFail + "명");
-        lines.push("  그중 비정상 종료 " + cell.crash + "명");
-        lines.push("  그중 파산 " + cell.bankrupt + "명");
+        const lines = phaseTipLines(v.version, label, cell, slot.night);
         s += '<rect x="' + (x - gap / 2) + '" y="' + rateTop + '" width="' + (bw + gap) + '" height="' + rateH +
           '" fill="transparent" data-tip="' + esc(lines.join(NL)) + '"/>';
       }
+    });
+    s += '<text x="' + (left + groupW * c + groupW / 2) + '" y="' + (H - 8) + '" text-anchor="middle">' + esc(dayLabel(d)) + "</text>";
+  });
+  el.innerHTML = '<svg viewBox="0 0 ' + W + " " + H + '">' + s + "</svg>";
+}
+
+/**
+ * 여러 버전 비교: 일차마다 낮·밤 두 묶음, 묶음 안에 버전별 박스(위, 플레이 시간)와 막대(아래, 이탈률)를 버전 색으로 나란히 그린다.
+ */
+function renderPhaseCompare(vs) {
+  const el = $("c-phase");
+  const pvs = vs.filter((v) => v.phases.length);
+  $("phaselegend").innerHTML = pvs.map((v) => '<span><i style="background:' + color(v) + '"></i>' + esc(v.version) + "</span>").join("") +
+    '<span class="muted">· 일차마다 왼쪽 묶음 = 낮, 오른쪽 묶음 = 밤</span>';
+  if (!pvs.length) { el.innerHTML = emptyBox("일차 기록이 있는 버전을 선택하세요."); return; }
+  const raidOnly = $("nightmode").value === "raid", withEnded = $("withended").checked;
+  const days = daysOf(pvs, (v) => v.phases);
+  const cells = days.map((d) => SLOTS.map((slot) => pvs.map((v) => phaseCell(v, d, slot.night, raidOnly, withEnded))));
+  let max = 0;
+  cells.flat(2).forEach((c) => { if (c.box) max = Math.max(max, c.box.hi, ...c.box.out); });
+  const tk = ticks(0, Math.max(1, max)), maxY = tk[tk.length - 1];
+  const W = widthOf(el), left = 56, right = 8, top = 10, plotW = W - left - right;
+  const timeH = 230, gapH = 34, rateH = 140, H = top + timeH + gapH + rateH + 40;
+  const rateTop = top + timeH + gapH;
+  const churnCount = isCount("churn");
+  const churnMax = churnCount ? countMax(Math.max(1, ...cells.flat(2).map((c) => c.ended))) : 1;
+  const sy = (y) => top + timeH - y / maxY * timeH, ry = (r) => rateTop + rateH - r / churnMax * rateH;
+  const groupW = plotW / days.length, slotW = groupW * 0.44, slotGap = groupW * 0.04;
+  const bw = Math.max(3, Math.min(18, (slotW - 2 * (pvs.length - 1)) / pvs.length)), gap = 2;
+  const fmtMin = (x) => num(x, 1) + "분";
+  const NL = String.fromCharCode(10);
+  let s = "";
+  tk.forEach((t) => {
+    s += '<line x1="' + left + '" x2="' + (W - right) + '" y1="' + sy(t) + '" y2="' + sy(t) + '" stroke="' + (t === 0 ? "var(--axis)" : "var(--grid)") + '"/>';
+    s += '<text x="' + (left - 6) + '" y="' + (sy(t) + 4) + '" text-anchor="end">' + esc(fmtMin(t)) + "</text>";
+  });
+  [0, 0.25, 0.5, 0.75, 1].map((t) => t * churnMax).forEach((t) => {
+    s += '<line x1="' + left + '" x2="' + (W - right) + '" y1="' + ry(t) + '" y2="' + ry(t) + '" stroke="' + (t === 0 ? "var(--axis)" : "var(--grid)") + '"/>';
+    s += '<text x="' + (left - 6) + '" y="' + (ry(t) + 4) + '" text-anchor="end">' + (churnCount ? num(t, 0) + "명" : (t * 100) + "%") + "</text>";
+  });
+  s += '<text x="' + left + '" y="' + (rateTop - 12) + '" class="lbl">' + (churnCount ? "이탈 인원" : "이탈률") + "</text>";
+  days.forEach((d, c) => {
+    const g0 = left + groupW * c + (groupW - slotW * 2 - slotGap) / 2;
+    SLOTS.forEach((slot, si) => {
+      const used = bw * pvs.length + gap * (pvs.length - 1), sx0 = g0 + si * (slotW + slotGap) + (slotW - used) / 2;
+      pvs.forEach((v, vi) => {
+        const cell = cells[c][si][vi], b = cell.box, x = sx0 + vi * (bw + gap), cx = x + bw / 2, col = color(v);
+        const label = dayLabel(d) + " " + slot.name;
+        if (b) {
+          s += '<line x1="' + cx + '" x2="' + cx + '" y1="' + sy(b.hi) + '" y2="' + sy(b.lo) + '" stroke="' + col + '" stroke-width="1.5"/>';
+          s += '<rect x="' + x + '" y="' + sy(b.q3) + '" width="' + bw + '" height="' + Math.max(1, sy(b.q1) - sy(b.q3)) +
+            '" rx="2" fill="' + col + '" fill-opacity="0.35" stroke="' + col + '" stroke-width="1.5"/>';
+          s += '<line x1="' + x + '" x2="' + (x + bw) + '" y1="' + sy(b.med) + '" y2="' + sy(b.med) + '" stroke="var(--text)" stroke-width="2"/>';
+          b.out.forEach((o) => { s += '<circle cx="' + cx + '" cy="' + sy(o) + '" r="2" fill="' + col + '"/>'; });
+          s += '<rect x="' + (x - gap / 2) + '" y="' + top + '" width="' + (bw + gap) + '" height="' + timeH + '" fill="transparent" data-tip="' +
+            esc(boxTip(v, label + (slot.night && raidOnly ? " (습격 중)" : ""), b, fmtMin)) + '"/>';
+        }
+        if (cell.reached) {
+          const r = cell.ended / cell.reached, val = churnCount ? cell.ended : r, h = rateH * val / churnMax;
+          if (h > 0) s += '<path d="' + barUp(x, ry(val), bw, h) + '" fill="' + col + '"/>';
+          s += '<rect x="' + (x - gap / 2) + '" y="' + rateTop + '" width="' + (bw + gap) + '" height="' + rateH +
+            '" fill="transparent" data-tip="' + esc(phaseTipLines(v.version, label, cell, slot.night).join(NL)) + '"/>';
+        }
+      });
+      s += '<text x="' + (g0 + si * (slotW + slotGap) + slotW / 2) + '" y="' + (H - 24) + '" text-anchor="middle" style="font-size:10px">' + slot.name + "</text>";
     });
     s += '<text x="' + (left + groupW * c + groupW / 2) + '" y="' + (H - 8) + '" text-anchor="middle">' + esc(dayLabel(d)) + "</text>";
   });
@@ -1679,7 +1759,7 @@ $("withended").checked = !!loadPrefs().withended;
 $("withended").onchange = () => { savePrefs({ withended: $("withended").checked }); renderPhase(); };
 $("tutseq").onchange = () => { savePrefs({ tutseq: $("tutseq").value }); renderTutorial(selectedVersions()); };
 $("tutguide").onchange = () => { savePrefs({ tutguide: $("tutguide").value }); renderTutorial(selectedVersions()); };
-for (const id of ["modmetric", "retrymode", "revmode", "nightmode", "vaultmetric", "balmode", "endsource", "endtype", "recmetric", "lossmetric", "dsmetric"]) {
+for (const id of ["modmetric", "retrymode", "revmode", "nightmode", "phasemode", "vaultmetric", "balmode", "endsource", "endtype", "recmetric", "lossmetric", "dsmetric"]) {
   const saved = loadPrefs()[id];
   if (saved && [...$(id).options].some((o) => o.value === saved)) $(id).value = saved;
   $(id).onchange = () => { savePrefs({ [id]: $(id).value }); render(); };
