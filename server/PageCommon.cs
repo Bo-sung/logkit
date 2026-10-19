@@ -41,6 +41,20 @@ main { max-width: 1400px; margin: 0 auto; padding: 14px 16px; display: grid;
 .card h3 { margin: 0 0 2px; font-size: 13.5px; }
 .card .sub { color: var(--muted); font-size: 12px; margin: 0 0 8px; }
 .section { grid-column: 1 / -1; margin: 8px 0 -4px; font-size: 12px; color: var(--muted); letter-spacing: 1px; }
+.sectabs { grid-column: 1 / -1; position: sticky; z-index: 4; align-self: start; margin: 0 -16px; padding: 8px 16px 6px;
+  background: var(--bg); border-bottom: 1px solid var(--border); }
+.sectabs .tabs { display: flex; gap: 2px; overflow-x: auto; scrollbar-width: thin; }
+.sectabs .tabs button { border: none; border-bottom: 2px solid transparent; border-radius: 0; background: none;
+  color: var(--muted); padding: 6px 12px; white-space: nowrap; }
+.sectabs .tabs button:hover { color: var(--text); }
+.sectabs .tabs button.on { color: var(--text); border-bottom-color: var(--accent); font-weight: 600; }
+.sectabs .tabs button span { font-size: 11px; margin-left: 3px; }
+.sectabs .toc { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 6px; }
+.sectabs .toc:empty { display: none; }
+.sectabs .toc a { color: var(--muted); font-size: 11.5px; text-decoration: none; border: 1px solid var(--border);
+  border-radius: 12px; padding: 1px 9px; cursor: pointer; }
+.sectabs .toc a:hover { color: var(--accent); border-color: var(--accent); }
+.card, .section { scroll-margin-top: var(--stick, 120px); }
 .row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .muted { color: var(--muted); }
 .chk { display: flex; align-items: center; gap: 4px; color: var(--muted); user-select: none; }
@@ -405,8 +419,80 @@ document.addEventListener("mousemove", (ev) => {
 });
 
 /** 머리글 컨트롤을 연결하고 저장된 키가 있으면 바로 불러온다. 페이지 스크립트 끝에서 부른다. */
+/**
+ * main의 .section 구분선마다 탭을 만든다. 탭을 고르면 그 섹션의 카드만 보이고, 아래 줄에 카드 바로가기가 나온다.
+ * 맨 앞 카드(버전 선택)와 <details>가 든 카드(집계 기준)는 늘 보이고, 그 사이 첫 섹션 앞 카드(버전별 요약 표)는 "요약" 탭이 된다.
+ * 고른 탭은 prefs의 tab에 남긴다.
+ */
+function initSectionTabs() {
+  const main = document.querySelector("main"), kids = [...main.children];
+  const first = kids.findIndex((el) => el.classList.contains("section"));
+  if (first < 0) return;
+  const groups = [];
+  if (first > 1) groups.push({ name: "요약", head: null, cards: kids.slice(1, first) });
+  kids.slice(first).forEach((el) => {
+    if (el.classList.contains("section")) { groups.push({ name: el.textContent.trim(), head: el, cards: [] }); return; }
+    if (!el.querySelector("details")) groups[groups.length - 1].cards.push(el);
+  });
+  const ALL = "전체";
+  const nav = document.createElement("nav");
+  nav.className = "sectabs";
+  main.insertBefore(nav, kids[1]);
+  const saved = loadPrefs().tab;
+  let current = saved === ALL || groups.some((g) => g.name === saved) ? saved : groups[0].name;
+  const titleOf = (card) => {
+    const h = card.querySelector("h3");
+    if (!h) return "";
+    const c = h.cloneNode(true);
+    c.querySelectorAll("span").forEach((x) => x.remove());
+    return c.textContent.trim();
+  };
+  const draw = () => {
+    const tabs = [ALL].concat(groups.map((g) => g.name));
+    const links = current === ALL
+      ? groups.map((g, i) => '<a data-sec="' + i + '">' + esc(g.name) + "</a>")
+      : groups.find((g) => g.name === current).cards.map((c, i) => titleOf(c) ? '<a data-card="' + i + '">' + esc(titleOf(c)) + "</a>" : "");
+    nav.innerHTML = '<div class="tabs">' + tabs.map((n) => '<button type="button" data-tab="' + esc(n) + '"' + (n === current ? ' class="on"' : "") + ">" +
+      esc(n) + (n === ALL ? "" : '<span class="muted">' + groups.find((g) => g.name === n).cards.length + "</span>") + "</button>").join("") +
+      '</div><div class="toc">' + links.join("") + "</div>";
+    groups.forEach((g) => {
+      const show = current === ALL || g.name === current;
+      if (g.head) g.head.hidden = current !== ALL;
+      g.cards.forEach((c) => { c.hidden = !show; });
+    });
+  };
+  // 붙박이 머리글 + 탭 줄 높이만큼 카드 스크롤 위치를 내린다
+  const stick = () => {
+    const top = document.querySelector("header").offsetHeight;
+    nav.style.top = top + "px";
+    document.documentElement.style.setProperty("--stick", (top + nav.offsetHeight + 8) + "px");
+  };
+  nav.onclick = (ev) => {
+    const tab = ev.target.closest("[data-tab]"), sec = ev.target.closest("[data-sec]"), card = ev.target.closest("[data-card]");
+    if (tab) {
+      if (tab.dataset.tab === current) return;
+      current = tab.dataset.tab;
+      savePrefs({ tab: current });
+      draw(); stick();
+      if (state.data) render();
+      // 탭을 바꾸면 새 섹션의 맨 위부터 보이게 한다
+      const top = nav.offsetTop - parseFloat(nav.style.top);
+      if (window.scrollY > top) window.scrollTo({ top });
+    } else if (sec) {
+      const g = groups[+sec.dataset.sec];
+      (g.head || g.cards[0]).scrollIntoView({ behavior: "smooth", block: "start" });
+    } else if (card) {
+      groups.find((g) => g.name === current).cards[+card.dataset.card].scrollIntoView({ behavior: "smooth", block: "start" });
+    }
+  };
+  draw();
+  stick();
+  window.addEventListener("resize", stick);
+}
+
 function initPage() {
   initUnitSwitches();
+  initSectionTabs();
   $("load").onclick = load;
   $("key").addEventListener("keydown", (ev) => { if (ev.key === "Enter") load(); });
   $("month").onchange = load;

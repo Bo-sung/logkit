@@ -195,10 +195,11 @@ public static class InsightsPage
     <div id="c-response" class="chart"></div>
   </section>
 
-  <section class="card wide">
+  <section class="card">
     <div class="q">관통·폭발 모듈 하향이 과도한 성능과 쏠림을 줄이는가?</div>
     <h3>관통 × 폭발 모듈 수별 습격 성공률<span class="basever"></span></h3>
-    <p class="sub">습격 총의 관통(가로)·폭발(세로) 모듈 개수 · 칸 색 = 습격 성공률, 숫자 = 습격 수 · 12개 이상은 한 칸</p>
+    <p class="sub">습격 총의 관통(가로)·폭발(세로) 모듈 개수 · 칸 색 = 습격 성공률, 숫자 = 습격 수 ·
+      개수는 구간으로 묶음(관통 8+·폭발 11+는 종결 총기 기본 기준)</p>
     <div class="row" style="margin:6px 0"><span class="muted">성공률 0%</span><span class="ramp rate"></span><span class="muted">100%</span></div>
     <div id="c-penexp" class="cells"></div>
   </section>
@@ -419,7 +420,6 @@ public static class InsightsPage
 const ENDPOINT = "/api/analytics/insights";
 const PREF_STORE = "logkit.insights";
 const MIN_NPC_ORDERS = 2;
-const PART_CAP = 12;
 const NEUTRAL = "#484f58";
 const RULE_DEFAULT = { pen: 8, exp: 11, spread: 1, rate: 1, heat: 2, grav: 1 };
 state.rule = Object.assign({}, RULE_DEFAULT, loadPrefs().rule || {});
@@ -921,18 +921,20 @@ function renderPenExp() {
   if (!v) { el.innerHTML = emptyBox("버전을 선택하세요."); return; }
   const raids = v.raids.filter((r) => r.parts && r.survived != null);
   if (!raids.length) { el.innerHTML = emptyBox(v.version + " — 총과 결과를 모두 아는 습격이 없습니다."); return; }
-  const cap = (n) => Math.min(PART_CAP, n);
+  // 구간 시작값. 마지막 구간이 종결 총기 기본 기준(관통 8, 폭발 11)부터 시작하게 묶는다
+  const PEN_BINS = [0, 1, 2, 3, 5, 8], EXP_BINS = [0, 1, 2, 3, 5, 8, 11];
+  const binOf = (bins, n) => bins.findLastIndex((b) => n >= b);
+  const binLabel = (bins, k) => k === bins.length - 1 ? bins[k] + "+" : bins[k + 1] - bins[k] === 1 ? String(bins[k]) : bins[k] + "~" + (bins[k + 1] - 1);
   let maxP = 0, maxE = 0;
-  raids.forEach((r) => { maxP = Math.max(maxP, cap(part(r.parts, "관통"))); maxE = Math.max(maxE, cap(part(r.parts, "폭발"))); });
-  const label = (n) => n >= PART_CAP ? PART_CAP + "+" : String(n);
+  raids.forEach((r) => { maxP = Math.max(maxP, binOf(PEN_BINS, part(r.parts, "관통"))); maxE = Math.max(maxE, binOf(EXP_BINS, part(r.parts, "폭발"))); });
   const cols = [...Array(maxP + 1).keys()], rows = [...Array(maxE + 1).keys()].reverse();
-  cellmap(el, rows.map((e) => "폭발 " + label(e)), cols.map(label), (i, j) => {
+  cellmap(el, rows.map((e) => "폭발 " + binLabel(EXP_BINS, e)), cols.map((p) => binLabel(PEN_BINS, p)), (i, j) => {
     const e = rows[i], p = cols[j];
-    const list = raids.filter((r) => cap(part(r.parts, "관통")) === p && cap(part(r.parts, "폭발")) === e);
+    const list = raids.filter((r) => binOf(PEN_BINS, part(r.parts, "관통")) === p && binOf(EXP_BINS, part(r.parts, "폭발")) === e);
     if (!list.length) return null;
     const ok = list.filter((r) => r.survived).length, rate = ok / list.length;
     return { t: rate, text: String(list.length),
-      tip: v.version + "\n관통 " + label(p) + " · 폭발 " + label(e) + "\n성공률 " + pct(rate) + " (" + ok + " / " + list.length + "회)" };
+      tip: v.version + "\n관통 " + binLabel(PEN_BINS, p) + " · 폭발 " + binLabel(EXP_BINS, e) + "\n성공률 " + pct(rate) + " (" + ok + " / " + list.length + "회)" };
   }, "관통 모듈 수", "");
 }
 
