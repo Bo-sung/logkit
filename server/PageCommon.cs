@@ -889,6 +889,17 @@ function initPage() {
   $("noeditor").checked = !!loadPrefs().noEditor;
   $("key").value = getKey();
   if (getKey()) load(); else setStatus("API 키를 입력하고 불러오세요.");
+  // 전체 리포트 진입 버튼: export 버튼 옆에 동적으로 삽입
+  if ($("export")) {
+    const fr = document.createElement("button");
+    fr.id = "fullreport";
+    fr.textContent = "전체 리포트";
+    fr.onclick = () => {
+      const m = ($("month") && $("month").value) || "all";
+      location.href = "/report/full?month=" + encodeURIComponent(m) + "&key=" + encodeURIComponent(getKey());
+    };
+    $("export").after(fr);
+  }
 }
 """;
 }

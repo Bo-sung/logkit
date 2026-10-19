@@ -180,6 +180,7 @@ public static class Program
             : trash.Purge(sessionId) ? Results.Json(new { sessionId, purged = true }, _jsonOptions) : Results.NotFound());
         app.MapDelete("/api/trash", (SessionTrash trash) => Results.Json(new { purged = trash.PurgeAll() }, _jsonOptions));
         app.MapGet("/api/summary/{month}.csv", HandleSummary);
+        app.MapGet("/report/full", HandleFullReport);
 
         PrepareStorage(options, app.Services.GetRequiredService<CsvSessionStore>(), app.Logger);
 
@@ -734,6 +735,60 @@ public static class Program
         }
 
         return Results.File(new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite), "text/csv; charset=utf-8", month + ".csv");
+    }
+
+    /// <summary>
+    /// GET /report/full — 4개 페이지를 탭으로 묶은 통합 리포트 HTML을 첨부로 내려준다.
+    /// ApiKeyAuth 기존 방식(헤더 또는 key 쿼리)으로 검증한다.
+    /// </summary>
+    private static IResult HandleFullReport(
+        string month, HttpContext context, ServerOptions options, GameAnalytics analytics)
+    {
+        string? provided = context.Request.Headers["X-Api-Key"].FirstOrDefault();
+        if (string.IsNullOrEmpty(provided)) provided = context.Request.Query["key"].FirstOrDefault();
+        if (string.IsNullOrEmpty(options.ApiKey) || !string.Equals(provided, options.ApiKey, StringComparison.Ordinal))
+            return Results.StatusCode(StatusCodes.Status401Unauthorized);
+
+        string m = string.IsNullOrEmpty(month) || month == "all" ? "all" : month;
+        bool skipEditor = false;
+        AnalyticsResponse analyticsData = analytics.Build(m, skipEditor);
+        WeaponAnalyticsResponse weaponsData = analytics.BuildWeapons(m, skipEditor);
+        InsightsResponse insightsData = analytics.BuildInsights(m, skipEditor);
+        ReplayResponse replayData = analytics.BuildReplay(m, skipEditor, null, null);
+
+        string savedAt = DateTime.UtcNow.ToString("yyyyMMdd-HHmm");
+        string fileName = $"logkit-report-{m}-{savedAt}.html";
+        var pages = new (string page, string label, string html, object data)[]
+        {
+            ("/analytics", "버전 통계", AnalyticsPage.Html, analyticsData),
+            ("/weapons", "총기 통계", WeaponsPage.Html, weaponsData),
+            ("/insights", "가설 통계", InsightsPage.Html, insightsData),
+            ("/replay", "습격 리플레이", ReplayPage.Html, replayData),
+        };
+        string html = BuildCombinedReportHtml(m, savedAt, pages);
+        byte[] bytes = System.Text.Encoding.UTF8.GetBytes(html);
+        return Results.File(bytes, "text/html; charset=utf-8", fileName);
+    }
+
+    private static string BuildCombinedReportHtml(string month, string savedAt,
+        (string page, string label, string html, object data)[] pages)
+    {
+        var sb = new System.Text.StringBuilder();
+        sb.Append("<!doctype html><html lang=\"ko\"><head><meta charset=\"utf-8\"><title>GGGG 통계 리포트</title>");
+        sb.Append("<style>.tab{display:none}iframe.tab{display:block;width:100%;height:80vh;border:0}</style></head><body>");
+        sb.Append("<div class=\"tabs\">");
+        foreach (var p in pages)
+            sb.Append("<button type=\"button\" class=\"tabbtn\">").Append(p.label).Append("</button>");
+        sb.Append("</div>");
+        foreach (var p in pages)
+        {
+            string embedded = CombinedReport.EmbedPage(p.html, p.page, p.data, month, savedAt);
+            sb.Append("<iframe class=\"tab\" srcdoc=\"").Append(embedded.Replace("\"", "&quot;")).Append("\"></iframe>");
+        }
+        sb.Append("<script>");
+        sb.Append("document.querySelectorAll('.tabbtn').forEach((b,i)=>b.onclick=()=>document.querySelectorAll('iframe.tab').forEach((f,j)=>f.style.display=i===j?'block':'none'));");
+        sb.Append("</script></body></html>");
+        return sb.ToString();
     }
 
     /// <summary>
