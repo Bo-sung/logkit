@@ -114,6 +114,7 @@ public static class Program
         builder.Services.AddSingleton<CsvSessionStore>();
         builder.Services.AddSingleton<SessionSummary>();
         builder.Services.AddSingleton<SessionTrash>();
+        builder.Services.AddSingleton<MapStore>();
         builder.Services.AddSingleton<UploadInbox>();
         builder.Services.AddHostedService<InboxProcessor>();
         builder.Services.AddSingleton<GameAnalytics>();
@@ -156,6 +157,12 @@ public static class Program
         app.MapGet("/api/analytics/insights", HandleInsights);
         app.MapGet("/replay", () => Results.Content(ReplayPage.Html, "text/html; charset=utf-8"));
         app.MapGet("/api/analytics/replay", HandleReplay);
+        app.MapGet("/api/maps", (MapStore maps) => Results.Json(new { maps = maps.List() }, _jsonOptions));
+        app.MapGet("/api/maps/{scene}/image", HandleMapImage);
+        app.MapPost("/api/maps/{scene}", HandleMapUpload);
+        app.MapDelete("/api/maps/{scene}", (string scene, MapStore maps) =>
+            !MapStore.IsValidScene(scene) ? Results.BadRequest(new { error = "invalid scene" })
+            : maps.Delete(scene) ? Results.Json(new { scene, deleted = true }, _jsonOptions) : Results.NotFound());
         app.MapDelete("/api/sessions/{sessionId}", HandleDeleteSession);
         app.MapDelete("/api/months/{month}", HandleDeleteMonth);
         app.MapGet("/api/trash", (ServerOptions o, SessionTrash trash) =>
@@ -329,6 +336,72 @@ public static class Program
 
         bool skipEditor = string.Equals(excludeEditor, "true", StringComparison.OrdinalIgnoreCase);
         return Results.Json(analytics.BuildReplay(month, skipEditor, version, stage), _jsonOptions);
+    }
+
+    /// <summary>GET /api/maps/{scene}/image 처리기. 맵 윗면 이미지를 돌려준다(갱신 시각을 ETag로 써서 브라우저 캐시).</summary>
+    private static IResult HandleMapImage(string scene, MapStore maps, HttpContext context)
+    {
+        if (!MapStore.IsValidScene(scene) || maps.Read(scene) is not { } info || maps.ImagePath(scene) is not { } path)
+        {
+            return Results.NotFound();
+        }
+
+        string etag = "\"" + info.UpdatedUtc.Ticks.ToString(System.Globalization.CultureInfo.InvariantCulture) + "\"";
+        context.Response.Headers.CacheControl = "private, max-age=300";
+        return Results.File(path, info.Type, entityTag: new Microsoft.Net.Http.Headers.EntityTagHeaderValue(etag));
+    }
+
+    /// <summary>
+    /// POST /api/maps/{scene} 처리기. multipart 폼의 image(PNG·JPEG·WebP)와 좌표 범위로 맵 이미지를 등록·교체한다.
+    /// 범위는 minX·maxX·minZ·maxZ 필드나, 같은 키를 가진 bounds JSON 파일(Unity 캡처 도구가 만드는 파일) 중 하나로 받는다.
+    /// </summary>
+    private static async Task<IResult> HandleMapUpload(string scene, HttpRequest request, MapStore maps)
+    {
+        if (!MapStore.IsValidScene(scene))
+        {
+            return Results.BadRequest(new { error = "씬 이름은 영문·숫자·_·- 80자 이내" });
+        }
+
+        if (!request.HasFormContentType)
+        {
+            return Results.BadRequest(new { error = "multipart/form-data로 보내세요" });
+        }
+
+        IFormCollection form = await request.ReadFormAsync();
+        IFormFile? image = form.Files.GetFile("image");
+        if (image == null || image.Length == 0 || image.Length > MapStore.MaxImageBytes)
+        {
+            return Results.BadRequest(new { error = "image 파일이 없거나 20MB를 넘습니다" });
+        }
+
+        double minX = MapStore.ParseNumber(form["minX"]), maxX = MapStore.ParseNumber(form["maxX"]);
+        double minZ = MapStore.ParseNumber(form["minZ"]), maxZ = MapStore.ParseNumber(form["maxZ"]);
+        string source = "upload";
+        if (form.Files.GetFile("bounds") is { Length: > 0 and < 65536 } boundsFile)
+        {
+            try
+            {
+                using StreamReader reader = new(boundsFile.OpenReadStream());
+                using JsonDocument doc = JsonDocument.Parse(await reader.ReadToEndAsync());
+                double Get(string name) => doc.RootElement.TryGetProperty(name, out JsonElement v) && v.TryGetDouble(out double d) ? d : double.NaN;
+                (minX, maxX, minZ, maxZ) = (Get("minX"), Get("maxX"), Get("minZ"), Get("maxZ"));
+                source = doc.RootElement.TryGetProperty("source", out JsonElement s) && s.ValueKind == JsonValueKind.String ? s.GetString() ?? "bounds" : "bounds";
+            }
+            catch (JsonException)
+            {
+                return Results.BadRequest(new { error = "bounds JSON을 읽을 수 없습니다" });
+            }
+        }
+
+        byte[] bytes;
+        using (MemoryStream buffer = new())
+        {
+            await image.CopyToAsync(buffer);
+            bytes = buffer.ToArray();
+        }
+
+        string? error = maps.Save(scene, bytes, minX, maxX, minZ, maxZ, source);
+        return error != null ? Results.BadRequest(new { error }) : Results.Json(maps.Read(scene), _jsonOptions);
     }
 
     private static IResult HandleInsights(string? month, string? excludeEditor, GameAnalytics analytics)

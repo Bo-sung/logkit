@@ -141,7 +141,7 @@ async function exportSnapshot() {
   try {
     const page = await (await fetch(location.pathname)).text();
     const snap = { page: location.pathname, origin: location.origin, savedAt: new Date().toISOString(), status,
-      data: state.data, selected: state.selected, colorOf: state.colorOf, prefs: loadPrefs() };
+      data: state.data, selected: state.selected, colorOf: state.colorOf, prefs: loadPrefs(), maps: snapshotMaps() };
     // 데이터 안의 닫는 스크립트 태그가 저장본의 스크립트를 끊지 않게 < 를 이스케이프한다(페이지 안에도 그 태그를 그대로 쓰지 않는다)
     const json = JSON.stringify(snap).replace(/</g, "\\u003c");
     const at = page.indexOf("<script>");
@@ -448,6 +448,17 @@ function pitchHeats(list, maxShare) {
       d[i] = PITCH_LUT[k]; d[i + 1] = PITCH_LUT[k + 1]; d[i + 2] = PITCH_LUT[k + 2]; d[i + 3] = PITCH_LUT[k + 3];
     }
     ctx.putImageData(out, 0, 0);
+    // 맵 이미지가 있으면 그 위에 열 색을 겹친다(이미지는 월드 범위로 배치)
+    if (showMapBackground() && mapOf(h.stageId)) {
+      const heat = document.createElement("canvas");
+      heat.width = size; heat.height = size;
+      heat.getContext("2d").drawImage(cv, 0, 0);
+      ctx.clearRect(0, 0, size, size);
+      ctx.fillStyle = "#0d1117";
+      ctx.fillRect(0, 0, size, size);
+      drawMap(ctx, h.stageId, (x, z) => [(x - h.minX) / (h.maxX - h.minX) * size, size - (z - h.minZ) / (h.maxZ - h.minZ) * size], 0.6);
+      ctx.drawImage(heat, 0, 0);
+    }
     // 위치를 읽기 쉽게 4×4 보조선
     ctx.strokeStyle = "rgba(255,255,255,0.08)";
     ctx.lineWidth = 1;
@@ -457,6 +468,61 @@ function pitchHeats(list, maxShare) {
     }
     cv.title = "X " + num(h.minX) + " ~ " + num(h.maxX) + ", Z " + num(h.minZ) + " ~ " + num(h.maxZ);
     h._canvas = cv;
+  });
+}
+
+// ─── 맵 배경 이미지 ───
+// /api/maps의 습격 맵 윗면 이미지. 각 이미지는 덮는 월드 범위(minX~maxX, minZ~maxZ)를 가지며 히트맵·리플레이 좌표에 맞춰 깐다.
+const MAPS = { images: {}, onload: null };
+/** 맵 목록을 받아 이미지를 미리 읽는다. 저장본이면 넣어 둔 data URL을 쓴다. 이미지가 하나 읽힐 때마다 다시 그린다. */
+async function loadMaps() {
+  let list = [];
+  if (SNAP) list = (SNAP.maps || []).map((m) => Object.assign({}, m.info, { src: m.dataUrl }));
+  else {
+    try { list = (await api("/api/maps")).maps.map((m) => Object.assign({}, m, {
+      src: "/api/maps/" + encodeURIComponent(m.scene) + "/image?key=" + encodeURIComponent(getKey()) + "&v=" + Date.parse(m.updatedUtc) })); }
+    catch (_) { return; }
+  }
+  MAPS.images = {};
+  list.forEach((m) => {
+    const img = new Image();
+    img.onload = () => {
+      MAPS.images[m.scene] = { info: m, img };
+      if (MAPS.onload) MAPS.onload(); else if (state.data) render();
+    };
+    img.src = m.src;
+  });
+}
+function mapOf(scene) { return MAPS.images[scene] || null; }
+function showMapBackground() { const el = $("mapbg"); return !el || el.checked; }
+/** toPx(x, z) → [px, py] 좌표계의 canvas에 맵 이미지를 깐다. 그렸으면 true. */
+function drawMap(ctx, scene, toPx, alpha) {
+  const m = mapOf(scene);
+  if (!m) return false;
+  const [x0, y0] = toPx(m.info.minX, m.info.maxZ), [x1, y1] = toPx(m.info.maxX, m.info.minZ);
+  ctx.save();
+  ctx.globalAlpha = alpha;
+  ctx.drawImage(m.img, x0, y0, x1 - x0, y1 - y0);
+  ctx.restore();
+  return true;
+}
+/** 맵 배경 체크박스(id="mapbg")를 저장된 설정으로 맞추고, 바꾸면 onChange를 부른다. */
+function initMapToggle(onChange) {
+  const el = $("mapbg");
+  if (!el) return;
+  el.checked = loadPrefs().mapbg !== false;
+  el.onchange = () => { savePrefs({ mapbg: el.checked }); onChange(); };
+}
+/** 저장본에 넣을 맵 이미지(긴 변 1024px JPEG로 줄임). */
+function snapshotMaps() {
+  return Object.values(MAPS.images).map(({ info, img }) => {
+    const k = Math.min(1, 1024 / Math.max(img.naturalWidth, img.naturalHeight));
+    const cv = document.createElement("canvas");
+    cv.width = Math.round(img.naturalWidth * k); cv.height = Math.round(img.naturalHeight * k);
+    cv.getContext("2d").drawImage(img, 0, 0, cv.width, cv.height);
+    const meta = Object.assign({}, info);
+    delete meta.src;
+    return { info: meta, dataUrl: cv.toDataURL("image/jpeg", 0.85) };
   });
 }
 
@@ -520,6 +586,7 @@ async function load() {
     if ($("noeditor").checked) p.set("excludeEditor", "true");
     savePrefs({ month: $("month").value, noEditor: $("noeditor").checked });
     state.data = await api(ENDPOINT + "?" + p);
+    loadMaps();
     const all = state.data.versions.map((v) => v.version);
     const kept = state.selected.filter((x) => all.includes(x));
     const saved = (loadPrefs().selected || []).filter((x) => all.includes(x));
@@ -621,6 +688,7 @@ function initSectionTabs() {
 function initPage() {
   initUnitSwitches();
   initSectionTabs();
+  initMapToggle(() => { if (state.data) render(); });
   $("load").onclick = load;
   $("key").addEventListener("keydown", (ev) => { if (ev.key === "Enter") load(); });
   $("month").onchange = load;
@@ -634,6 +702,7 @@ function initPage() {
     renderChips();
     render();
     setStatus(SNAP.status || "");
+    loadMaps();
     return;
   }
   $("noeditor").checked = !!loadPrefs().noEditor;

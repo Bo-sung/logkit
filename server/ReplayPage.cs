@@ -92,6 +92,7 @@ public static class ReplayPage
       <label class="chk"><input type="checkbox" id="showshots" checked> 발사</label>
       <label class="chk"><input type="checkbox" id="showhits" checked> 피격</label>
       <label class="chk"><input type="checkbox" id="showbg" checked> 전체 동선 바탕</label>
+      <label class="chk"><input type="checkbox" id="mapbg" checked> 맵 배경</label>
       <div class="legend" style="margin:0 0 0 auto">
         <span><i style="background:#58a6ff"></i>탈출 성공</span><span><i style="background:#f0883e"></i>사망</span>
         <span><i style="background:#3fb950"></i>엔딩 종료</span><span><i style="background:#8b949e"></i>결과 미기록</span>
@@ -115,6 +116,27 @@ public static class ReplayPage
         <div class="list"><table><thead><tr><th></th><th>세션 시작</th><th>일차</th><th>결과</th><th>길이</th></tr></thead><tbody id="rlist"></tbody></table></div>
       </div>
     </div>
+  </section>
+
+  <section class="card wide" id="mapadmin">
+    <details>
+      <summary>맵 배경 이미지 관리 — 습격 씬을 위에서 본 이미지와 그 이미지가 덮는 월드 좌표 범위</summary>
+      <p class="sub" style="margin-top:8px">등록한 이미지는 버전 통계·총기 통계의 위치 히트맵과 이 리플레이의 배경으로 깔립니다 ·
+        이미지 왼쪽~오른쪽 = minX~maxX, 아래~위 = minZ~maxZ(위쪽이 +Z) · Unity 캡처 도구가 만든 PNG와 JSON을 그대로 올리면 됩니다</p>
+      <div id="maplist"></div>
+      <div class="row" style="margin-top:10px">
+        <b>씬</b><input id="mapscene" list="mapscenes" placeholder="NightRaid_BankGrand" style="width:220px"><datalist id="mapscenes"></datalist>
+        <b>이미지</b><input id="mapimage" type="file" accept="image/png,image/jpeg,image/webp">
+        <b>범위 JSON</b><input id="mapbounds" type="file" accept="application/json,.json">
+      </div>
+      <div class="row" style="margin-top:6px">
+        <span class="muted">또는 직접 입력</span>
+        <input id="mapminx" placeholder="minX" style="width:80px"><input id="mapmaxx" placeholder="maxX" style="width:80px">
+        <input id="mapminz" placeholder="minZ" style="width:80px"><input id="mapmaxz" placeholder="maxZ" style="width:80px">
+        <button id="mapupload" type="button">등록·교체</button>
+        <span id="mapmsg" class="muted"></span>
+      </div>
+    </details>
   </section>
 </main>
 <div id="tip"></div>
@@ -152,6 +174,7 @@ async function load() {
     const prefs = loadPrefs();
     const data = await fetchReplay(prefs.ver, prefs.stage);
     applyData(data);
+    loadMaps();
   } catch (err) { setStatus(String(err.message || err), true); }
 }
 
@@ -268,6 +291,7 @@ function draw() {
   ctx.lineWidth = 1;
   for (let k = 1; k < 4; k++) { const p = Math.round(W * k / 4) + 0.5; ctx.beginPath(); ctx.moveTo(p, 0); ctx.lineTo(p, W); ctx.moveTo(0, p); ctx.lineTo(W, p); ctx.stroke(); }
   if (!rp.bounds) { updateHud([]); return; }
+  if (showMapBackground()) drawMap(ctx, state.data.stage, (x, z) => toCanvas(x, z, W), 0.55);
   if ($("showbg").checked) { if (!rp.bg) rp.bg = background(W); ctx.drawImage(rp.bg, 0, 0); }
   const t = rp.t, trail = Number($("trail").value), list = visible().filter((r) => r.on);
   const alive = [];
@@ -432,7 +456,43 @@ $("field").addEventListener("click", (ev) => {
 });
 
 state.units = {};
+MAPS.onload = () => draw();
+initMapToggle(draw);
+
+// ─── 맵 배경 이미지 관리 ───
+async function renderMapAdmin() {
+  const data = await api("/api/maps");
+  const scenes = new Set((state.data ? state.data.versions.flatMap((v) => v.stages.map((s) => s.scene)) : []).concat(data.maps.map((m) => m.scene)));
+  $("mapscenes").innerHTML = [...scenes].sort().map((s) => '<option value="' + esc(s) + '">').join("");
+  $("maplist").innerHTML = data.maps.length ? '<div class="tablewrap"><table><tr><th>씬</th><th>X 범위</th><th>Z 범위</th><th>크기</th><th>등록</th><th>방법</th><th></th></tr>' +
+    data.maps.map((m) => "<tr><td>" + esc(m.scene) + "</td><td>" + num(m.minX, 1) + " ~ " + num(m.maxX, 1) + "</td><td>" + num(m.minZ, 1) + " ~ " + num(m.maxZ, 1) +
+      "</td><td>" + num(m.bytes / 1024, 0) + "KB</td><td>" + esc(toLocal(m.updatedUtc)) + "</td><td>" + esc(m.source) + '</td><td><button type="button" data-del="' +
+      esc(m.scene) + '" class="danger">삭제</button></td></tr>').join("") + "</table></div>" : emptyBox("등록된 맵 이미지가 없습니다.");
+}
+$("maplist").onclick = async (ev) => {
+  const b = ev.target.closest("[data-del]");
+  if (!b || !confirm(b.dataset.del + " 맵 이미지를 삭제할까요?")) return;
+  await fetch("/api/maps/" + encodeURIComponent(b.dataset.del), { method: "DELETE", headers: { "X-Api-Key": getKey() } });
+  await renderMapAdmin(); await loadMaps(); draw();
+};
+$("mapupload").onclick = async () => {
+  const scene = $("mapscene").value.trim(), img = $("mapimage").files[0], bounds = $("mapbounds").files[0];
+  if (!scene || !img) { $("mapmsg").textContent = "씬과 이미지를 고르세요."; return; }
+  const form = new FormData();
+  form.append("image", img);
+  if (bounds) form.append("bounds", bounds);
+  else for (const k of ["minX", "maxX", "minZ", "maxZ"]) form.append(k, $("map" + k.toLowerCase()).value.trim());
+  $("mapmsg").textContent = "올리는 중…";
+  const res = await fetch("/api/maps/" + encodeURIComponent(scene), { method: "POST", body: form, headers: { "X-Api-Key": getKey() } });
+  const body = await res.json().catch(() => ({}));
+  $("mapmsg").textContent = res.ok ? scene + " 등록함" : "실패 — " + (body.error || res.status);
+  if (res.ok) { await renderMapAdmin(); await loadMaps(); }
+};
+$("mapadmin").querySelector("details").addEventListener("toggle", (ev) => { if (ev.target.open) renderMapAdmin().catch((err) => { $("mapmsg").textContent = String(err.message || err); }); });
+
 if (initSnapshotMode()) {
+  $("mapadmin").style.display = "none";
+  loadMaps();
   // 저장본에는 저장할 때의 버전·스테이지 궤적만 들어 있다
   applyData(SNAP.data);
   $("ver").disabled = true;

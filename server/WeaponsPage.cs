@@ -144,7 +144,8 @@ public static class WeaponsPage
       <div><h3>습격 발사 위치 히트맵</h3>
         <p class="sub" style="margin:0">NightRaid / weapon_fired의 position X·Z 밀도 · 동일 축척 · 버전 내 비율, 제곱근 스케일 · 위쪽이 +Z · 모든 총 합계</p></div>
       <div class="row"><span class="muted">스테이지</span><select id="stage"></select>
-        <span class="muted">적음</span><span class="ramp pitch"></span><span class="muted">많음</span></div>
+        <span class="muted">적음</span><span class="ramp pitch"></span><span class="muted">많음</span>
+        <label class="chk"><input type="checkbox" id="mapbg" checked> 맵 배경</label></div>
     </div>
     <div id="heat" class="heatgrid" style="margin-top:10px"></div>
   </section>

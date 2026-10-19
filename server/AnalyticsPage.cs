@@ -127,7 +127,8 @@ public static class AnalyticsPage
           일차 = 습격 시작의 day(없으면 직전 상점 일차, 0일차 = 튜토리얼 훈련)</p></div>
       <div class="row"><span class="muted">스테이지</span><select id="stage"></select>
         <span class="muted">일차</span><select id="heatday"></select>
-        <span class="muted">적음</span><span class="ramp pitch"></span><span class="muted">많음</span></div>
+        <span class="muted">적음</span><span class="ramp pitch"></span><span class="muted">많음</span>
+        <label class="chk"><input type="checkbox" id="mapbg" checked> 맵 배경</label></div>
     </div>
     <div id="heat" class="heatgrid" style="margin-top:10px"></div>
   </section>

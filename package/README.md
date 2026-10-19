@@ -7,7 +7,7 @@
 Package Manager → `Add package from git URL`:
 
 ```
-https://github.com/Bo-sung/logkit.git?path=package#v0.3.0
+https://github.com/Bo-sung/logkit.git?path=package#v0.4.0
 ```
 
 ## 사용법
@@ -41,3 +41,16 @@ GameLogger.Measure("ComboLength", 5); // 값 기록(횟수 + 합계 → 평균 �
 - 데이터는 `Application.persistentDataPath/Logs/{세션ID}.jsonl`과 `{세션ID}.metrics.json`에 버퍼링되고, 보낸 위치는 `{세션ID}.progress.json`에 남는다. 마무리 전송이 끝나면 모두 지워진다.
 
 자세한 운영 방식과 수신 서버는 저장소 루트 README를 참고한다.
+
+## 맵 윗면 캡처 (에디터)
+
+`Tools > LogKit > 맵 윗면 캡처` 창은 습격 씬을 위에서 수직으로 내려다본 이미지(`<씬>.png`)와 그 이미지가 덮는 월드 좌표 범위
+(`<씬>.json`: minX·maxX·minZ·maxZ)를 만든다. 대시보드는 이 범위로 이미지를 위치 히트맵·습격 리플레이 배경에 맞춰 깐다.
+
+- **열린 씬 찍기** 또는 프로젝트 창에서 씬 에셋을 여러 개 고른 뒤 **고른 씬 찍기**.
+- **절단 높이(Y)**: 이 높이에서 아래를 찍으므로 그보다 높은 지붕·천장은 잘린다. 실내 맵은 바닥 + 2~3m 정도가 알맞다.
+- **범위**: 기본은 렌더러 경계(너무 큰 하늘·바닥 판은 `렌더러 최대 크기`로 제외) + 여백을 정사각형으로 맞춘 값. 맵에 맞지 않으면 **범위 직접 지정**.
+- **밝게 찍기**: 밤 조명 대신 평면 주변광과 위에서 비추는 임시 조명으로 찍고 안개를 끈 뒤 원래대로 되돌린다.
+- 결과는 프로젝트 루트의 `LogKitMaps/`(설정 가능)에 저장된다. 대시보드 리플레이 페이지의 **맵 배경 이미지 관리**에 PNG와 JSON을 올리거나,
+  **서버에 바로 올리기**를 켜고 서버 주소·API 키를 넣으면 찍자마자 `POST /api/maps/{씬}`으로 등록한다.
+
