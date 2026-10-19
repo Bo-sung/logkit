@@ -247,8 +247,9 @@ public sealed class GameAnalytics
         ("Tutorial_WoodenHouse", "튜토리얼 목조주택", 1),
         ("NightRaid_WoodenHouse", "목조주택", 1),
         ("NightRaid_BankGrand", "은행", 3),
-        ("NightRaid_Millitary_base", "군사기지", 1),
         ("NightRaid_JungleCampus", "정글 캠퍼스", 1),
+        ("NightRaid_Millitary_base", "군사기지", 1),
+        ("NightRaid_JungleCampus_improve", "정글 캠퍼스 (개선)", 1),
     };
 
     /// <summary>범위 안 세션을 요약(digest)과 함께 앱 버전별로 묶는다. CSV가 없는 세션은 뺀다.</summary>

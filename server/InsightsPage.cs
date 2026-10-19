@@ -127,9 +127,11 @@ public static class InsightsPage
     <div class="q">튜토리얼 행동 가이드 상시 표시가 막힘을 줄이는가?</div>
     <div class="row" style="justify-content:space-between">
       <h3>튜토리얼 진행</h3>
-      <div class="row"><span class="muted">시퀀스</span><select id="tutseq"></select></div>
+      <div class="row"><span class="muted">시퀀스</span><select id="tutseq"></select>
+        <span class="muted">가이드 모드</span><select id="tutguide"></select></div>
     </div>
-    <p class="sub">에디터 단계 넘기기(debugSkipped)가 있는 진행은 뺌 · 가이드 표시 정책 필드가 없어 정책 비교 대신 버전끼리 비교합니다</p>
+    <p class="sub">에디터 단계 넘기기(debugSkipped)가 있는 진행은 뺌 · 가이드 모드 = step_started의 guideMode(행동 가이드 표시 정책).
+      결과 표는 버전 × 가이드 모드로 나누고, 퍼널·소요 시간은 고른 가이드 모드만 그립니다 · guideMode가 없는 이전 로그는 "(기록 없음)"</p>
     <div class="subhead">결과</div>
     <div id="t-tutorial"></div>
     <div class="subhead">단계별 퍼널<span class="unitsw" data-unit="funnel"></span></div>
@@ -333,7 +335,7 @@ public static class InsightsPage
 
   <section class="card wide">
     <h3>엔딩 요약</h3>
-    <p class="sub">은퇴 = Game / retire_completed($100,000 결제), 엔드 상자 = NightRaid / end_chest_opened · 플레이어 = 세이브 ·
+    <p class="sub">은퇴 = Game / retire_completed(은퇴 비용 결제, 현재 $250,000), 엔드 상자 = NightRaid / end_chest_opened · 플레이어 = 세이브 ·
       첫 엔딩 = 플레이어가 먼저 본 엔딩 · 계속하기 = 엔딩 화면에서 continue를 고른 비율 · 은퇴 재시도 = 같은 세이브에 은퇴가 2번 이상(은퇴 직전 자동저장을 불러와 다시 함) ·
       엔딩 로그를 넣은 빌드부터 쌓입니다</p>
     <div id="t-ending"></div>
@@ -377,7 +379,7 @@ public static class InsightsPage
 
   <section class="card">
     <h3>은퇴 시점 자금</h3>
-    <p class="sub">retire_completed 1회 = 1 · 결제 전·후 잔액(은퇴 비용 $100,000)과 남은 대출(outstandingLoans)</p>
+    <p class="sub">retire_completed 1회 = 1 · 결제 전·후 잔액(은퇴 비용 = 로그의 cost, 현재 $250,000)과 남은 대출(outstandingLoans)</p>
     <div id="c-retirestate" class="chart"></div>
   </section>
 
@@ -405,8 +407,9 @@ public static class InsightsPage
 
   <section class="card wide">
     <h3>슬롯머신 요약</h3>
-    <p class="sub">회전 1회 = $500 · 당첨금 = 회전 시작 때 정해진 지급 예정 금액(plannedPrize) · 환급률 = 당첨금 ÷ 지출 ·
-      이론 = 그 회전들의 확률표(처음 3회·마지막 판·일반) 기대 당첨금 ÷ 지출 · 이용 세션 = 한 번이라도 돌린 세션 / 상점 기록이 있는 세션 ·
+    <p class="sub">지출 = 로그의 price(현재 $1,000, 이전 빌드 $500, 티켓 회전 0) · 당첨금 = 회전 시작 때 정해진 지급 예정 금액(plannedPrize) ·
+      환급률 = 현금 회전의 당첨금 ÷ 지출(티켓 회전 제외) · 이론 = 그 회전들의 확률표(oddsPool) 기대 당첨금 ÷ 지출 ·
+      이용 세션 = 한 번이라도 돌린 세션 / 상점 기록이 있는 세션 ·
       슬롯머신 로그(slot_machine_spin_started)를 넣은 빌드부터 쌓입니다</p>
     <div id="t-slot"></div>
   </section>
@@ -438,8 +441,8 @@ public static class InsightsPage
 
   <section class="card">
     <h3>확률표별 실제 환급률</h3>
-    <p class="sub">oddsPool별 당첨금 ÷ 지출 · 괄호 = 게임 가중치로 계산한 이론 환급률 · 처음 3회 = 저·중 당첨 ×5,
-      마지막 판(결제 전 잔액 &lt; $1,000) = 저·중·폭발 ×5 · 회전 수가 적으면 방사($50,000) 한 번에 크게 흔들립니다</p>
+    <p class="sub">oddsPool별 현금 회전의 당첨금 ÷ 지출 · 괄호 = 게임 가중치로 계산한 이론 환급률 · 고정 = 현재 확률표($1,000),
+      처음 3회·마지막 판·일반 = 이전 빌드($500) · 회전 수가 적으면 방사($50,000) 한 번에 크게 흔들립니다</p>
     <div id="c-slotpool" class="chart"></div>
   </section>
 
@@ -451,13 +454,13 @@ public static class InsightsPage
 
   <section class="card">
     <h3>회전 직전 잔액<span class="unitsw" data-unit="slotbal"></span></h3>
-    <p class="sub">결제 전 잔액(balanceBefore) · 회전 1회 = 1 · $1,000 미만은 마지막 판 확률표가 적용된 회전</p>
+    <p class="sub">결제 전 잔액(balanceBefore) · 회전 1회 = 1 · 이전 빌드는 $1,000 미만이면 마지막 판 확률표가 적용됨</p>
     <div id="c-slotbal" class="chart"></div>
   </section>
 
   <section class="card">
     <h3>플레이어별 회전 수 × 순이득</h3>
-    <p class="sub">점 1개 = 플레이어 1명(모든 회전 합) · 오른쪽 아래로 갈수록 많이 돌려 많이 잃음 · 점선 = 이론 환급률(일반 98%)로 기대되는 순이득</p>
+    <p class="sub">점 1개 = 플레이어 1명(모든 회전 합) · 오른쪽 아래로 갈수록 많이 돌려 많이 잃음 · 점선 = 고른 버전들의 현금 회전 평균 기대 순이득</p>
     <div id="c-slotscatter" class="chart"></div>
   </section>
 
@@ -497,7 +500,9 @@ public static class InsightsPage
 종료 사유  습격 결과(습격 탈출 성공·습격 사망·습격 엔딩 종료)의 exitReason
 슬롯머신   Shop / slot_machine_spin_started(레버를 당겨 결제가 성공한 순간 1회). 당첨금은 plannedPrize(지급 예정)이며
            회전 중 오브젝트가 꺼지면 실제 지급이 안 될 수 있음. 이론 환급률 = 게임 SlotMachineReels 가중치
-           (꽝 709 / 저 200 / 중 70 / 폭발 20 / 방사 1, 처음 3회 저·중 ×5, 마지막 판 저·중·폭발 ×5)
+           현재(oddsPool=fixed, $1,000): 꽝 614 / 기본 200($500) / 연장 100($1,000) / 연사 50($2,000) / 관통 25($4,000) /
+           폭발 10($5,000) / 방사 1($50,000). 이전 빌드($500): 꽝 709 / 저 200 / 중 70 / 폭발 20 / 방사 1, 처음 3회 저·중 ×5,
+           마지막 판 저·중·폭발 ×5. 티켓 회전(paidWithTicket)은 가격 0이라 환급률에서 뺌
 박스플롯   상자 = 1~3사분위, 가운데 선 = 중앙값, 수염 = 1.5×IQR 안의 최솟값·최댓값, 점 = 그 밖의 값</pre>
     </details>
   </section>
@@ -869,16 +874,23 @@ function renderTutorial(vs) {
     $("c-funnel").innerHTML = ""; $("c-steptime").innerHTML = "";
     return;
   }
-  const runsOf = (v) => v.tutorials.filter((t) => t.sequence === seq && !t.debug);
+  // 가이드 모드: 전체 또는 한 모드(guideMode가 없는 이전 로그는 빈 문자열)
+  const modeName = (m) => m || "(기록 없음)";
+  const modes = [...new Set(vs.flatMap((v) => v.tutorials.filter((t) => t.sequence === seq).map((t) => t.guideMode || "")))].sort();
+  const gsel = $("tutguide"), gprev = gsel.value || loadPrefs().tutguide || "*";
+  gsel.innerHTML = '<option value="*">전체</option>' + modes.map((m) => '<option value="' + esc(m) + '">' + esc(modeName(m)) + "</option>").join("");
+  gsel.value = gprev === "*" || modes.includes(gprev) ? gprev : "*";
+  const guide = gsel.value;
+  const runsOf = (v) => v.tutorials.filter((t) => t.sequence === seq && !t.debug && (guide === "*" || (t.guideMode || "") === guide));
   let rows = "";
-  vs.forEach((v) => {
-    const runs = runsOf(v);
+  vs.forEach((v) => modes.forEach((m) => {
+    const runs = v.tutorials.filter((t) => t.sequence === seq && !t.debug && (t.guideMode || "") === m);
     if (!runs.length) return;
-    rows += "<tr><td>" + esc(v.version) + "</td><td>" + runs.length + "</td>" +
+    rows += "<tr><td>" + esc(v.version) + "</td><td>" + esc(modeName(m)) + "</td><td>" + runs.length + "</td>" +
       OUTCOMES.map(([k]) => { const n = runs.filter((t) => t.outcome === k).length; return "<td>" + n + " <span class=\"muted\">" + pct(n / runs.length, 0) + "</span></td>"; }).join("") +
-      "<td>" + v.tutorials.filter((t) => t.sequence === seq && t.debug).length + "</td></tr>";
-  });
-  $("t-tutorial").innerHTML = rows ? '<div class="tablewrap"><table><tr><th>버전</th><th>진행</th>' +
+      "<td>" + v.tutorials.filter((t) => t.sequence === seq && t.debug && (t.guideMode || "") === m).length + "</td></tr>";
+  }));
+  $("t-tutorial").innerHTML = rows ? '<div class="tablewrap"><table><tr><th>버전</th><th>가이드 모드</th><th>진행</th>' +
     OUTCOMES.map(([, n]) => "<th>" + esc(n) + "</th>").join("") + "<th>디버그 제외</th></tr>" + rows + "</table></div>" : emptyBox("이 시퀀스의 기록이 없습니다.");
   const steps = new Map();
   vs.forEach((v) => runsOf(v).forEach((t) => t.steps.forEach((s) => steps.set(s.index + "|" + s.id, s))));
@@ -1316,20 +1328,30 @@ function renderEnding(vs) {
 }
 
 // ─── 슬롯머신 ───
-// 게임 SlotMachineReels.ChooseResult의 가중치. 저 = 기본·연장($1,000), 중 = 연사·관통($2,000), 폭발 $5,000, 방사 $50,000
-const SLOT_POOLS = [["first_three", "처음 3회"], ["last_funds", "마지막 판"], ["ordinary", "일반"]];
-const SLOT_SYMBOLS = [["none", "꽝", 0], ["기본", "기본", 1000], ["연장", "연장", 1000], ["연사", "연사", 2000], ["관통", "관통", 2000],
-  ["폭발", "폭발", 5000], ["방사", "방사", 50000]];
+// 게임 SlotMachineReels의 확률표(oddsPool). fixed = 현재(1회 $1,000, 심볼마다 가중치·당첨금이 다름),
+// first_three·last_funds·ordinary = 이전 빌드(1회 $500, 저 = 기본·연장 $1,000, 중 = 연사·관통 $2,000, 폭발 $5,000, 방사 $50,000)
+const SLOT_POOLS = [["fixed", "고정"], ["first_three", "처음 3회(이전)"], ["last_funds", "마지막 판(이전)"], ["ordinary", "일반(이전)"]];
+const SLOT_SYMBOLS = [["none", "꽝"], ["기본", "기본"], ["연장", "연장"], ["연사", "연사"], ["관통", "관통"], ["폭발", "폭발"], ["방사", "방사"]];
 function slotOdds(pool) {
-  const intro = pool === "first_three", last = pool === "last_funds", m = intro || last ? 5 : 1;
-  const w = { none: 709, low: 200 * m, mid: 70 * m, exp: 20 * (last ? 5 : 1), rad: 1 };
-  const total = w.none + w.low + w.mid + w.exp + w.rad;
-  const p = { none: w.none, 기본: w.low / 2, 연장: w.low / 2, 연사: w.mid / 2, 관통: w.mid / 2, 폭발: w.exp, 방사: w.rad };
-  Object.keys(p).forEach((k) => { p[k] /= total; });
-  return { p, ev: (w.low * 1000 + w.mid * 2000 + w.exp * 5000 + w.rad * 50000) / total };
+  // [가중치, 당첨금] 심볼별
+  let table;
+  if (pool === "fixed") {
+    table = { none: [614, 0], 기본: [200, 500], 연장: [100, 1000], 연사: [50, 2000], 관통: [25, 4000], 폭발: [10, 5000], 방사: [1, 50000] };
+  } else {
+    const last = pool === "last_funds", m = pool === "first_three" || last ? 5 : 1;
+    table = { none: [709, 0], 기본: [100 * m, 1000], 연장: [100 * m, 1000], 연사: [35 * m, 2000], 관통: [35 * m, 2000],
+      폭발: [20 * (last ? 5 : 1), 5000], 방사: [1, 50000] };
+  }
+  const total = Object.values(table).reduce((a, [w]) => a + w, 0), p = {};
+  let ev = 0;
+  Object.entries(table).forEach(([k, [w, prize]]) => { p[k] = w / total; ev += w / total * prize; });
+  return { p, ev, price: pool === "fixed" ? 1000 : 500 };
 }
 const SLOT_ODDS = Object.fromEntries(SLOT_POOLS.map(([k]) => [k, slotOdds(k)]));
-const spinEv = (x) => (SLOT_ODDS[x.pool] || SLOT_ODDS.ordinary).ev * x.price / 500;
+const oddsOf = (x) => SLOT_ODDS[x.pool] || SLOT_ODDS.ordinary;
+// 회전 하나의 기대 당첨금(달러). 이론 환급률 = 현금 회전의 합 ÷ 지출
+const spinEv = (x) => oddsOf(x).ev;
+const paidOf = (list) => list.filter((x) => !x.ticket && x.price > 0);
 const sumOf = (list, f) => list.reduce((a, x) => a + f(x), 0);
 const signedMoney = (x) => (x > 0 ? "+" : x < 0 ? "−" : "") + money(Math.abs(x));
 function groupMap(list, key) {
@@ -1355,14 +1377,16 @@ function renderSlot(vs) {
   let rows = "";
   svs.forEach((v) => {
     const sp = v.spins, sess = bySession(v), players = byPlayer(v), counts = sess.map((l) => l.length);
+    const paid = paidOf(sp), tickets = sp.length - paid.length;
     const cost = sumOf(sp, (x) => x.price), prize = sumOf(sp, (x) => x.prize), nets = players.map(net);
+    const paidCost = sumOf(paid, (x) => x.price), paidPrize = sumOf(paid, (x) => x.prize);
     const cell = (main, sub) => "<td>" + main + (sub ? ' <span class="muted">' + sub + "</span>" : "") + "</td>";
     rows += "<tr><td>" + esc(v.version) + "</td>" +
       cell(sess.length + " / " + v.shopSessions, pct(ratio(sess.length, v.shopSessions), 0)) +
-      cell(num(sp.length, 0) + "회", "") +
+      cell(num(sp.length, 0) + "회", tickets ? "티켓 " + tickets : "") +
       cell(num(avg(counts), 1) + "회", "중앙 " + num(median(counts), 1)) +
       cell(money(cost), "") + cell(money(prize), "") +
-      cell(pct(ratio(prize, cost), 0), "이론 " + pct(ratio(sumOf(sp, spinEv), cost), 0)) +
+      cell(pct(ratio(paidPrize, paidCost), 0), "이론 " + pct(ratio(sumOf(paid, spinEv), paidCost), 0)) +
       cell(signedMoney(avg(nets)), "중앙 " + signedMoney(median(nets))) +
       cell(nets.filter((x) => x > 0).length + " / " + players.length + "명", pct(ratio(nets.filter((x) => x > 0).length, players.length), 0)) +
       cell(pct(ratio(sp.filter((x) => x.prize > 0).length, sp.length), 0), "") +
@@ -1380,7 +1404,7 @@ function renderSlot(vs) {
   // 플레이어 환급률
   const RTP_EDGES = [0, 0.5, 1, 1.5, 2, 4];
   const rtpCats = ["0% (전부 꽝)", "~50%", "50~100%", "100~150%", "150~200%", "200~400%", "400%+"];
-  distribution($("c-slotrtp"), svs, (v) => byPlayer(v).map((l) => sumOf(l, (x) => x.prize) / sumOf(l, (x) => x.price)), rtpCats,
+  distribution($("c-slotrtp"), svs, (v) => byPlayer(v).map(paidOf).filter((l) => l.length).map((l) => sumOf(l, (x) => x.prize) / sumOf(l, (x) => x.price)), rtpCats,
     (r) => r === 0 ? 0 : 1 + RTP_EDGES.slice(1).filter((e) => r >= e).length, "명", "slotrtp");
 
   // 순이득: 전체(플레이어) + n일차(플레이어-일차)
@@ -1405,24 +1429,25 @@ function renderSlot(vs) {
   }, (v, p) => v.version + " · " + dayLabel(p.x) + "\n이용 " + pct(p.used / p.reached) + " (" + p.used + " / " + p.reached + "명)\n회전 " + p.spins + "회", count);
 
   // 확률표별 환급률
-  const poolKeys = SLOT_POOLS.map(([k, n]) => n + " (이론 " + pct(SLOT_ODDS[k].ev / 500, 0) + ")");
+  const pools = SLOT_POOLS.filter(([k]) => svs.some((v) => paidOf(v.spins).some((x) => (x.pool || "ordinary") === k)));
+  const poolKeys = pools.map(([k, n]) => n + " (이론 " + pct(SLOT_ODDS[k].ev / SLOT_ODDS[k].price, 0) + ")");
   let poolMax = 0;
   const poolCell = (v, i) => {
-    const list = v.spins.filter((x) => (x.pool || "ordinary") === SLOT_POOLS[i][0]);
+    const list = paidOf(v.spins).filter((x) => (x.pool || "ordinary") === pools[i][0]);
     if (!list.length) return null;
     const cost = sumOf(list, (x) => x.price), prize = sumOf(list, (x) => x.prize), r = prize / cost;
     return { value: r, label: pct(r, 0), tip: "실제 " + pct(r) + " · 이론 " + pct(ratio(sumOf(list, spinEv), cost)) + "\n회전 " + list.length + "회 · 지출 " +
       money(cost) + " · 당첨금 " + money(prize) };
   };
-  svs.forEach((v) => SLOT_POOLS.forEach((_, i) => { const c = poolCell(v, i); if (c) poolMax = Math.max(poolMax, c.value); }));
+  svs.forEach((v) => pools.forEach((_, i) => { const c = poolCell(v, i); if (c) poolMax = Math.max(poolMax, c.value); }));
   hbars($("c-slotpool"), svs, poolKeys, (v, key) => poolCell(v, poolKeys.indexOf(key)), Math.max(1, poolMax), false, 170);
 
   // 당첨 심볼
-  const symKeys = SLOT_SYMBOLS.map(([, n, prize]) => prize ? n + " ($" + num(prize, 0) + ")" : n);
+  const symKeys = SLOT_SYMBOLS.map(([, n]) => n);
   hbars($("c-slotsym"), svs, symKeys, (v, key) => {
     const [id] = SLOT_SYMBOLS[symKeys.indexOf(key)], sp = v.spins;
     const n = sp.filter((x) => (x.symbol || "none") === id).length;
-    const theory = sumOf(sp, (x) => (SLOT_ODDS[x.pool] || SLOT_ODDS.ordinary).p[id]) / sp.length;
+    const theory = sumOf(sp, (x) => oddsOf(x).p[id]) / sp.length;
     const bar = shareBar("slotsym", n, sp.length, "회", 1);
     bar.tip += "\n이론 " + pct(theory, 2);
     return bar;
@@ -1434,9 +1459,11 @@ function renderSlot(vs) {
   distribution($("c-slotbal"), svs, (v) => v.spins.filter((x) => x.before != null).map((x) => x.before), balCats,
     (b) => BAL_EDGES.findLastIndex((e) => b >= e), "회", "slotbal");
 
-  // 회전 수 × 순이득
+  // 회전 수 × 순이득. 기대선 기울기 = 현금 회전 1회의 평균 기대 순이득
+  const allPaid = svs.flatMap((v) => paidOf(v.spins));
+  const slotEdge = allPaid.length ? sumOf(allPaid, (x) => spinEv(x) - x.price) / allPaid.length : 0;
   scatter($("c-slotscatter"), svs, (v) => byPlayer(v).map((l) => ({ x: l.length, y: net(l), prize: sumOf(l, (x) => x.prize),
-    cost: sumOf(l, (x) => x.price) })), (n) => -n * 500 * (1 - SLOT_ODDS.ordinary.ev / 500), (x) => num(x, 0) + "회", signedMoney,
+    cost: sumOf(l, (x) => x.price) })), (n) => n * slotEdge, (x) => num(x, 0) + "회", signedMoney,
     (v, p) => v.version + "\n회전 " + p.x + "회\n순이득 " + signedMoney(p.y) + "\n지출 " + money(p.cost) + " · 당첨금 " + money(p.prize) +
       "\n환급률 " + pct(ratio(p.prize, p.cost), 0));
 }
@@ -1587,6 +1614,7 @@ document.querySelectorAll("#rule input").forEach((inp) => {
 $("withended").checked = !!loadPrefs().withended;
 $("withended").onchange = () => { savePrefs({ withended: $("withended").checked }); renderPhase(); };
 $("tutseq").onchange = () => { savePrefs({ tutseq: $("tutseq").value }); renderTutorial(selectedVersions()); };
+$("tutguide").onchange = () => { savePrefs({ tutguide: $("tutguide").value }); renderTutorial(selectedVersions()); };
 for (const id of ["modmetric", "retrymode", "revmode", "nightmode", "vaultmetric", "balmode", "endsource", "endtype", "recmetric", "lossmetric", "dsmetric"]) {
   const saved = loadPrefs()[id];
   if (saved && [...$(id).options].some((o) => o.value === saved)) $(id).value = saved;

@@ -135,7 +135,13 @@ internal sealed class InsightTracker
         switch (name)
         {
             case GameEvents.TutorialStepStarted:
-                Step(TutorialRun(sequence), data);
+                InsightTutorial started = TutorialRun(sequence);
+                Step(started, data);
+                if (started.GuideMode.Length == 0)
+                {
+                    started.GuideMode = Text(data, "guideMode");
+                }
+
                 break;
 
             case GameEvents.TutorialStepCompleted:
@@ -281,6 +287,7 @@ internal sealed class InsightTracker
                     Price = Number(data, "price") ?? 0,
                     Prize = Number(data, "plannedPrize") ?? 0,
                     Symbol = Text(data, "plannedSymbol"),
+                    Ticket = Bool(data, "paidWithTicket") == true,
                     SaveId = _saveId,
                 });
                 break;
@@ -1020,6 +1027,9 @@ public sealed class InsightSpin
     public double Prize { get; set; }
     public string Symbol { get; set; } = string.Empty;
 
+    /// <summary>티켓으로 돌린 회전(paidWithTicket, 가격 0). 환급률 계산에서 뺀다.</summary>
+    public bool Ticket { get; set; }
+
     [System.Text.Json.Serialization.JsonIgnore]
     internal string SaveId { get; set; } = string.Empty;
 
@@ -1043,6 +1053,9 @@ public sealed class InsightTutorial
     public string Sequence { get; set; } = string.Empty;
     public string Outcome { get; set; } = string.Empty;
     public bool Debug { get; set; }
+
+    /// <summary>step_started의 guideMode(튜토리얼 행동 가이드 표시 정책). 이 필드를 넣기 전 빌드는 빈 문자열.</summary>
+    public string GuideMode { get; set; } = string.Empty;
     public List<InsightTutorialStep> Steps { get; set; } = new();
 
     [System.Text.Json.Serialization.JsonIgnore]
@@ -1075,6 +1088,7 @@ public sealed class InsightTutorial
 
         Outcome = next.Outcome;
         Debug |= next.Debug;
+        GuideMode = GuideMode.Length > 0 ? GuideMode : next.GuideMode;
     }
 }
 
