@@ -20,17 +20,16 @@ using LogKit;
 
 GameLogger.Info("Combat", "보스 격파");
 GameLogger.Warn("System", "낮은 프레임 감지");
-GameLogger.Data("Error", "Run", "런 실패", new FailData { Stage = 3 });
+GameLogger.Data("Error", "Run", "런 실패", new MetricSample { key = "RunDuration" });
 
 // 인스펙터 대신 코드로 설정을 넣을 때 — 기동 초반에 호출한다 (null 항목은 기존 값 유지)
 GameLogger.Configure(
-    developmentServerUrl: "http://172.21.10.67:5000/api/logs",
-    releaseServerUrl: "http://172.21.10.67:5000/api/logs");
+    developmentServerUrl: "http://localhost:5000/api/logs",
+    releaseServerUrl: "http://localhost:5000/api/logs");
 
-// 플레이 지표 — 서버 대시보드에서 세션·월 단위로 집계된다
-GameLogger.Count("Attack");           // 발생 횟수 +1
-GameLogger.Count("AttackHit");        // 조건부 횟수 +1 (서버 설정으로 명중률 자동 계산)
-GameLogger.Measure("ComboLength", 5); // 값 기록(횟수 + 합계 → 평균 자동 계산)
+// 지표 — 서버 대시보드에서 세션·월 단위로 집계된다
+GameLogger.Count("EnemyDefeated");   // 발생 횟수 +1
+GameLogger.Measure("RunDuration", 5); // 값 기록(횟수 + 합계 → 평균 자동 계산)
 ```
 
 - `Debug.Log` 계열은 설정을 끄지 않는 한 자동 수집된다.
@@ -44,8 +43,8 @@ GameLogger.Measure("ComboLength", 5); // 값 기록(횟수 + 합계 → 평균 �
 
 ## 맵 윗면 캡처 (에디터)
 
-`Tools > LogKit > 맵 윗면 캡처` 창은 습격 씬을 위에서 수직으로 내려다본 이미지(`<씬>.png`)와 그 이미지가 덮는 월드 좌표 범위
-(`<씬>.json`: minX·maxX·minZ·maxZ)를 만든다. 대시보드는 이 범위로 이미지를 위치 히트맵·습격 리플레이 배경에 맞춰 깐다.
+`Tools > LogKit > 맵 윗면 캡처` 창은 씬을 위에서 수직으로 내려다본 이미지(`<씬>.png`)와 그 이미지가 덮는 월드 좌표 범위
+(`<씬>.json`: minX·maxX·minZ·maxZ)를 만든다. 대시보드는 이 범위로 이미지를 위치 히트맵·리플레이 배경에 맞춰 깐다.
 
 - **열린 씬 찍기** 또는 프로젝트 창에서 씬 에셋을 여러 개 고른 뒤 **고른 씬 찍기**.
 - **절단 높이(Y)**: 이 높이에서 아래를 찍으므로 그보다 높은 지붕·천장은 잘린다. 실내 맵은 바닥 + 2~3m 정도가 알맞다.

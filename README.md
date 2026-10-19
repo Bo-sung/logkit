@@ -27,10 +27,10 @@ Count/Measure로 모은 플레이 지표(공격 횟수 등)는 배치와 함께 
 Package Manager → `Add package from git URL`:
 
 ```
-https://github.com/Bo-sung/logkit.git?path=package#v0.3.0
+https://github.com/Bo-sung/logkit.git?path=package#v0.4.0
 ```
 
-- `#v0.3.0` 태그로 버전 고정을 권장한다. 최신이면 태그 부분을 생략한다.
+- `#v0.4.0` 태그로 버전 고정을 권장한다. 최신이면 태그 부분을 생략한다.
 - 오프라인 프로젝트는 `package/` 폴더를 대상 프로젝트의 `Packages/` 아래에 통째로 복사해도 된다(embedded package).
 
 ### 사용법
@@ -42,12 +42,11 @@ using LogKit;
 
 GameLogger.Info("Combat", "보스 격파");
 GameLogger.Warn("System", "메모리 부족");
-GameLogger.Data("Info", "Run", "런 종료", new RunData { Score = 1200 });
+GameLogger.Data("Info", "Run", "런 종료", new MetricSample { key = "RunDuration" });
 
-// 플레이 지표 — 서버가 세션·월 단위로 집계하고 appsettings의 DerivedMetrics로 명중률까지 계산한다
-GameLogger.Count("Attack");          // 공격 시도 +1
-GameLogger.Count("AttackHit");       // 명중 +1
-GameLogger.Measure("ComboLength", 5); // 콤보 길이 기록(횟수 + 합계 → 평균 자동 계산)
+// 지표 — 서버가 세션·월 단위로 집계한다
+GameLogger.Count("EnemyDefeated");   // 발생 횟수 +1
+GameLogger.Measure("RunDuration", 5); // 값 기록(횟수 + 합계 → 평균 자동 계산)
 ```
 
 설정은 씬에 `GameLogger` 컴포넌트를 배치해 Inspector에서 덮어쓸 수 있다(없으면 코드 기본값).

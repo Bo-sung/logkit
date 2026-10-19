@@ -14,25 +14,29 @@ using UnityEngine.SceneManagement;
 namespace LogKit.EditorTools
 {
     /// <summary>
-    /// 습격 씬을 위에서 수직으로 내려다본 이미지(PNG)와 그 이미지가 덮는 월드 좌표 범위(JSON)를 만드는 에디터 창.
-    /// LogKit 대시보드는 이 범위로 이미지를 위치 히트맵·습격 리플레이의 배경에 맞춰 깐다(이미지 위쪽 = +Z, 오른쪽 = +X).
-    /// 직교 카메라를 절단 높이에 두고 아래를 보게 해 그보다 높은 지붕·천장은 잘라 내고, 렌더러 경계로 정사각형 범위를 정한다.
+    /// 씬을 위에서 수직으로 내려다본 이미지(PNG)와 그 이미지가 덮는 월드 좌표 범위(JSON)를 만드는 에디터 창.
+    /// LogKit 대시보드는 이 범위로 이미지를 위치 히트맵·리플레이의 배경에 맞춰 깐다(이미지 위쪽 = +Z, 오른쪽 = +X).
+    /// 직교 카메라를 절단 높이에 두고 아래를 보게 해 그보다 높은 요소는 잘라 내고, 렌더러 경계로 정사각형 범위를 정한다.
     /// </summary>
     public sealed class MapTopViewCapture : EditorWindow
     {
         private const string Prefix = "LogKit.MapCapture.";
 
-        private int _resolution = 2048;
-        private float _cutHeight = 3f;
-        private float _maxRendererSize = 400f;
-        private float _padding = 4f;
-        private bool _brighten = true;
-        private bool _manualBounds;
-        private float _minX = -50, _maxX = 50, _minZ = -50, _maxZ = 50;
-        private string _outputFolder = "LogKitMaps";
-        private string _serverUrl = "http://localhost:5000";
-        private string _apiKey = "dev-log-key";
-        private bool _upload;
+        [SerializeField] private int _resolution = 2048;
+        [SerializeField] private float _cutHeight = 3f;
+        [SerializeField] private float _maxRendererSize = 400f;
+        [SerializeField] private float _padding = 4f;
+        [SerializeField] private bool _brighten = true;
+        [SerializeField] private bool _manualBounds;
+        [SerializeField] private float _minX = -50f;
+        [SerializeField] private float _maxX = 50f;
+        [SerializeField] private float _minZ = -50f;
+        [SerializeField] private float _maxZ = 50f;
+        [SerializeField] private string _outputFolder = "LogKitMaps";
+        [SerializeField] private string _serverUrl = "http://localhost:5000";
+        [SerializeField] private string _apiKey = "dev-log-key";
+        [SerializeField] private bool _upload;
+
         private Vector2 _scroll;
         private string _log = string.Empty;
 
@@ -73,7 +77,7 @@ namespace LogKit.EditorTools
                 "아래 '서버에 바로 올리기'로 보냅니다.", MessageType.Info);
 
             _resolution = EditorGUILayout.IntPopup("해상도", _resolution, new[] { "1024", "2048", "4096" }, new[] { 1024, 2048, 4096 });
-            _cutHeight = EditorGUILayout.FloatField(new GUIContent("절단 높이(Y)", "이 높이에서 아래를 찍습니다. 이보다 높은 지붕·천장은 보이지 않습니다."), _cutHeight);
+            _cutHeight = EditorGUILayout.FloatField(new GUIContent("절단 높이(Y)", "이 높이에서 아래를 찍습니다. 이보다 높은 요소는 보이지 않습니다."), _cutHeight);
             _brighten = EditorGUILayout.Toggle(new GUIContent("밝게 찍기", "밤 조명 대신 평면 주변광과 위에서 비추는 임시 조명으로 찍고 안개를 끕니다."), _brighten);
 
             _manualBounds = EditorGUILayout.Toggle(new GUIContent("범위 직접 지정", "끄면 렌더러 경계로 자동 계산합니다."), _manualBounds);
@@ -312,7 +316,7 @@ namespace LogKit.EditorTools
             }
         }
 
-        /// <summary>서버의 POST /api/maps/{scene}에 이미지와 범위 JSON을 올린다.</summary>
+        /// <summary>서버의 POST /api/maps/{scene}에 이미지와 범위 JSON을 올린다. 등록 엔드포인트와 필드는 와이어 호환 유지.</summary>
         private string Upload(string scene, byte[] png, string json)
         {
             var form = new List<IMultipartFormSection>

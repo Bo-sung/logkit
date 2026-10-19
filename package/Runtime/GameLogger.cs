@@ -38,7 +38,7 @@ namespace LogKit
         private static readonly int MainThreadId = Thread.CurrentThread.ManagedThreadId;
 
         [Header("서버 연결")]
-        // 개발 기본값은 로그 서버 호스트 PC의 수신 주소다. 상황에 따라 Inspector에서 덮어쓴다.
+        // 서버 연결 값이며 Inspector에서 덮어쓸 수 있다.
         [SerializeField] private string _developmentServerUrl = DEFAULT_SERVER_URL;
         [SerializeField] private string _releaseServerUrl = DEFAULT_SERVER_URL;
         [SerializeField] private string _apiKey = DEFAULT_API_KEY;
@@ -246,7 +246,7 @@ namespace LogKit
         }
 
         /// <summary>
-        /// 플레이 지표 카운터를 1 늘린다. 공격 시도·스캔 발동 같은 발생 횟수 집계에 쓴다.
+        /// 지표 카운터를 1 늘린다. 발생 횟수 집계에 쓴다.
         /// </summary>
         public static void Count(string key) => Count(key, 1L);
 
@@ -265,7 +265,7 @@ namespace LogKit
 
         /// <summary>
         /// 값을 하나 기록해 지표의 횟수와 합계를 함께 늘린다.
-        /// 조준 거리·프레임 시간처럼 횟수와 평균을 같이 보고 싶은 값에 쓴다.
+        /// 횟수와 평균을 같이 보고 싶은 값에 쓴다.
         /// </summary>
         public static void Measure(string key, double value)
         {
