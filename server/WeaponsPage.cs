@@ -132,6 +132,29 @@ public static class WeaponsPage
 
   <section class="card wide">
     <div class="row" style="justify-content:space-between">
+      <div><h3>습격당 평균 총기 가치</h3>
+        <p class="sub" style="margin:0">습격 시작에 들고 간 총(weaponCode)의 가치 · 습격 1회 = 1 · 달러 = 코어 $50 + 모듈 구매가 합,
+          재화 = 모듈 재화 합(방사는 단 순서대로 ×1, ×2…) — 게임이 공유 코드로 같은 총을 다시 만들 때 받는 비용과 같은 규칙 ·
+          가격은 현재 게임 모듈 표 기준(이전 빌드의 가격 변경은 반영하지 않음) · 상자 = 1~3사분위, 가운데 선 = 중앙값, 툴팁에 평균</p></div>
+      <div class="row">
+        <select id="valunit">
+          <option value="dollars">달러</option>
+          <option value="credits">모듈 재화</option>
+        </select>
+        <select id="valgroup">
+          <option value="all">전체</option>
+          <option value="day">일차별</option>
+          <option value="stage">스테이지별</option>
+          <option value="result">결과별(탈출·사망)</option>
+        </select>
+      </div>
+    </div>
+    <div id="t-value" style="margin-top:8px"></div>
+    <div id="c-value" class="chart" style="margin-top:8px"></div>
+  </section>
+
+  <section class="card wide">
+    <div class="row" style="justify-content:space-between">
       <div><h3>스테이지별 파츠 사용 (습격 발사 기준)</h3>
         <p class="sub" style="margin:0">그 파츠가 들어간 총으로 쏜 발사 / 그 스테이지의 구성 확인 발사 · 튜토리얼 선택 반영</p></div>
       <div class="row"><span class="muted">버전</span><select id="sver"></select></div>
@@ -305,6 +328,8 @@ function renderKpi(vs) {
     ["습격 중 새 구성 사용", (v) => num(v.raidWeaponChanges, 0)],
     ["습격 실제 발사 (구성 ID 없음)", (v) => num(v.raidShots, 0) + " (" + num(v.raidShotsWithoutId, 0) + ")"],
     ["습격당 발사", (v) => num(ratio(v.raidShots, v.raidsWithLoadout), 1)],
+    ["습격당 평균 총기 가치 (달러 / 재화)", (v) => v.raidValues.length ? "$" + num(avg(v.raidValues.map((x) => x.dollars)), 0) + " / " +
+      num(avg(v.raidValues.map((x) => x.credits)), 0) : "–"],
     ["기록 품질"],
     ["코드 미생성 퇴장 (게임 측 실패)", (v) => num(v.exportFailed, 0)],
     ["코드 해석 실패 (퇴장 / 사격 입력)", (v) => num(v.decodeFailed, 0) + " / " + num(v.attackInputs - v.attackInputsDecoded, 0)],
@@ -554,7 +579,7 @@ function renderHeat(vs) {
 
 function render() {
   const vs = selectedVersions();
-  const charts = ["c-parts", "t-parts", "c-combos", "c-matrix", "c-size", "t-configs", "t-stage", "heat"];
+  const charts = ["c-parts", "t-parts", "c-combos", "c-matrix", "c-size", "t-configs", "t-stage", "heat", "c-value", "t-value"];
   if (vs.length === 0) {
     $("kpi").innerHTML = emptyBox(state.data && state.data.versions.length ? "비교할 버전을 선택하세요." : "범위 안에 세션이 없습니다.");
     $("basis-sub").textContent = "";
@@ -570,7 +595,43 @@ function render() {
   renderSize(vs);
   renderConfigs(vs);
   renderStages(vs);
+  renderValue(vs);
   renderHeat(vs);
+}
+
+/** 습격당 휴대 총 가치: 버전별 요약 표 + 묶음(전체·일차·스테이지·결과)별 박스플롯. */
+function renderValue(vs) {
+  const unit = $("valunit").value, group = $("valgroup").value;
+  const fmt = unit === "dollars" ? (x) => "$" + num(x, 0) : (x) => num(x, 0);
+  const of = (list) => list.map((x) => x[unit]);
+  const median = (list) => { const s = list.slice().sort((a, b) => a - b); return s.length ? quantile(s, 0.5) : null; };
+  const rows = vs.map((v) => {
+    const list = v.raidValues;
+    return "<tr><td>" + esc(v.version) + "</td><td>" + num(list.length, 0) + " / " + num(v.raids, 0) + "</td><td>" +
+      (list.length ? "$" + num(avg(list.map((x) => x.dollars)), 0) : "–") + "</td><td>" +
+      (list.length ? "$" + num(median(list.map((x) => x.dollars)), 0) : "–") + "</td><td>" +
+      (list.length ? num(avg(list.map((x) => x.credits)), 0) : "–") + "</td><td>" +
+      (list.length ? "$" + num(Math.max(...list.map((x) => x.dollars)), 0) : "–") + "</td></tr>";
+  }).join("");
+  $("t-value").innerHTML = '<div class="tablewrap"><table><tr><th>버전</th><th>휴대 총 기록 습격 / 습격</th><th>평균 가치</th><th>중앙값</th>' +
+    "<th>평균 재화</th><th>최대 가치</th></tr>" + rows + "</table></div>";
+  const dayName = (d) => d + "일차";
+  let cats, pick, label = String;
+  if (group === "day") {
+    cats = [...new Set(vs.flatMap((v) => v.raidValues.filter((x) => x.day != null).map((x) => x.day)))].sort((a, b) => a - b);
+    pick = (v, c) => v.raidValues.filter((x) => x.day === c);
+    label = dayName;
+  } else if (group === "stage") {
+    cats = [...new Set(vs.flatMap((v) => v.raidValues.map((x) => x.stage)))].sort();
+    pick = (v, c) => v.raidValues.filter((x) => x.stage === c);
+  } else if (group === "result") {
+    cats = ["탈출 성공", "사망"];
+    pick = (v, c) => v.raidValues.filter((x) => c === "사망" ? x.survived === false : x.survived === true);
+  } else {
+    cats = ["전체 습격"];
+    pick = (v) => v.raidValues;
+  }
+  boxV($("c-value"), vs, cats, (v, c) => of(pick(v, c)), fmt, label);
 }
 
 $("basis").value = state.basis;
@@ -585,6 +646,11 @@ $("partmetric").onchange = () => { savePrefs({ partMetric: $("partmetric").value
 $("mver").onchange = () => { savePrefs({ matrixVersion: $("mver").value }); renderMatrix(selectedVersions()); };
 $("sver").onchange = () => { savePrefs({ stageVersion: $("sver").value }); renderStages(selectedVersions()); };
 $("stage").onchange = () => renderHeat(selectedVersions());
+for (const id of ["valunit", "valgroup"]) {
+  const saved = loadPrefs()[id];
+  if (saved && [...$(id).options].some((o) => o.value === saved)) $(id).value = saved;
+  $(id).onchange = () => { savePrefs({ [id]: $(id).value }); renderValue(selectedVersions()); };
+}
 initPage();
 </script>
 </body>

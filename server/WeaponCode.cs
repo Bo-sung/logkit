@@ -48,6 +48,40 @@ public static class WeaponCode
         ["8d0c0ddd9cf586745abb86717c7cc6b6"] = "물",
     };
 
+    /// <summary>코어 구매가(게임 WeaponPurchasePrices.Core). 코드의 블록 목록에는 코어가 없다.</summary>
+    public const int CorePrice = 50;
+
+    /// <summary>
+    /// 모듈 GUID → (달러 구매가 buyPrice, 모듈 재화 moduleCreditCost, 산탄 여부). 게임 Assets/Data/Modules/*.asset 기준이다.
+    /// 산탄(방사)은 게임처럼 이미 단 산탄 수 + 1을 재화에 곱한다(WeaponPurchasePrices.ModuleCredits). 가격이 바뀌면 여기를 고친다.
+    /// </summary>
+    private static readonly Dictionary<string, (int Buy, int Credits, bool Shotgun)> _modulePrices = new(StringComparer.OrdinalIgnoreCase)
+    {
+        ["6289f0e60b334b04b823408ae1ae2e36"] = (10, 0, false),   // 기본 블럭
+        ["bf4a63288b8e9694787904964ba8acd4"] = (300, 50, false), // 차지
+        ["d557014a75723774da9948844f570e45"] = (10, 0, false),   // 컬러
+        ["3819fc250847c48448b1dc45b4ce63a6"] = (500, 0, false),  // 폭발
+        ["bf1f0c3b718a48f9a19debdebc5da1a4"] = (100, 0, false),  // 연장
+        ["9b18b219018266c4a90db0f81b293ced"] = (100, 0, false),  // 연사
+        ["36f778d16d639104b90e807dc937aaaa"] = (500, 200, false), // 중력
+        ["cf32abdb412c6124cabcbdd85c103cb5"] = (500, 200, false), // 발열
+        ["0277d45126374004b802798d93561da2"] = (500, 100, false), // 유도
+        ["d402a84ed473853498b702ccf20adc69"] = (500, 0, false),  // 관통
+        ["8185707d079aa3d4eba1d33833009eb2"] = (300, 50, false), // 반사
+        ["cc30a6f07cbd432428e9db5a6f3315ae"] = (100, 0, false),  // 스코프
+        ["ac721da9683bfcc46b24fdba51a5b278"] = (300, 50, true),  // 방사(산탄)
+        ["d5834196fd7a14146bee8605f3766655"] = (100, 0, false),  // 가속
+        ["9841ca931bf7a8c4b866da354b808ad7"] = (200, 100, false), // 회전
+        ["4793f8d918e54829be0e1db07dc07830"] = (400, 0, false),  // 4방향 분할
+        ["be1aadfb48ae4f55ac16cb1d8d5429c8"] = (200, 0, false),  // 2방향 분할
+        ["5508fb3f89d14ebd9747c598276197c6"] = (100, 0, false),  // 트리거
+        ["8d0c0ddd9cf586745abb86717c7cc6b6"] = (50, 10, false),  // 물
+    };
+
+    /// <summary>모듈 구매가·재화. 표에 없는 모듈은 게임 기본 모듈가(WeaponPurchasePrices.Module = 30)와 재화 0으로 본다.</summary>
+    internal static (int Buy, int Credits, bool Shotgun) ModulePrice(string guid) =>
+        _modulePrices.TryGetValue(guid, out var price) ? price : (30, 0, false);
+
     /// <summary>모듈 GUID를 표시 이름으로 바꾼다.</summary>
     public static string ModuleName(string guid) =>
         _moduleNames.TryGetValue(guid, out string? name) ? name : "모듈 " + guid[..Math.Min(8, guid.Length)];
@@ -263,6 +297,23 @@ public sealed class WeaponLayout
     private static readonly int[] TutorialFaces = { 0, 1, 2, 3, 5 };
 
     /// <summary>모듈 표시 이름별 블록 개수.</summary>
+    /// <summary>
+    /// 총기 가치: 달러 = 코어 + 모듈 구매가 합, 재화 = 모듈 재화 합(산탄은 단 순서대로 재화 × 1, 2, 3…).
+    /// 게임이 공유 코드로 같은 총을 다시 만들 때 받는 비용과 같은 규칙이다.
+    /// </summary>
+    public (int Dollars, int Credits) Value()
+    {
+        int dollars = WeaponCode.CorePrice, credits = 0, shotguns = 0;
+        foreach (WeaponBlock block in Blocks)
+        {
+            (int buy, int cost, bool shotgun) = WeaponCode.ModulePrice(block.Module);
+            dollars += buy;
+            credits += shotgun ? cost * ++shotguns : cost;
+        }
+
+        return (dollars, credits);
+    }
+
     public Dictionary<string, int> PartCounts()
     {
         Dictionary<string, int> counts = new(StringComparer.Ordinal);

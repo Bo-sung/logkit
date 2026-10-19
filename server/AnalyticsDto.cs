@@ -243,10 +243,23 @@ public sealed class WeaponVersionStats
     /// <summary>NightRaid / weapon_fired 수. WithoutId는 구성 ID가 없는 발사.</summary>
     public int RaidShots { get; set; }
     public int RaidShotsWithoutId { get; set; }
+
+    /// <summary>휴대 총 코드가 있는 습격마다의 총 가치(코어 + 모듈 구매가, 모듈 재화).</summary>
+    public List<RaidWeaponValue> RaidValues { get; set; } = new();
     /// <summary>스테이지별 습격 발사 위치 밀도. 범위는 전 버전 공통.</summary>
     public List<Heatmap> ShotHeatmaps { get; set; } = new();
 
     public List<WeaponConfig> Configs { get; set; } = new();
+}
+
+/// <summary>습격 하나의 휴대 총 가치. Dollars = 코어 $50 + 모듈 구매가 합, Credits = 모듈 재화 합(산탄은 단 순서대로 배수).</summary>
+public sealed class RaidWeaponValue
+{
+    public string Stage { get; set; } = string.Empty;
+    public int? Day { get; set; }
+    public bool? Survived { get; set; }
+    public int Dollars { get; set; }
+    public int Credits { get; set; }
 }
 
 /// <summary>서로 다른 총기 구성 하나의 버전 내 합계. Key는 게임의 구성 ID(weaponAssemblyId, 이름·색 제외)다.</summary>

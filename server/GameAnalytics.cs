@@ -928,6 +928,17 @@ public sealed class GameAnalytics
             {
                 v.Raids++;
                 v.RaidsWithLoadout += raid.HasLoadout ? 1 : 0;
+                if (raid.LoadoutValue is { } value)
+                {
+                    v.RaidValues.Add(new RaidWeaponValue
+                    {
+                        Stage = raid.Scene,
+                        Day = raid.Day,
+                        Survived = raid.Survived,
+                        Dollars = value.Dollars,
+                        Credits = value.Credits,
+                    });
+                }
                 v.RaidWeaponChanges += raid.WeaponChanges;
                 v.RaidShotsWithoutId += raid.ShotsWithoutId;
                 v.RaidShots += raid.ShotsWithoutId;
@@ -1371,6 +1382,7 @@ internal sealed class WeaponTracker
                 if (Layout(data, out _) is { } loadout)
                 {
                     raid.HasLoadout = true;
+                    raid.LoadoutValue = loadout.Value();
                     Config(loadout).RaidLoadouts++;
                 }
 
@@ -1502,6 +1514,9 @@ internal sealed class RaidDigest
 
     // 총기 — 습격 시작의 휴대 총, 습격 중 구성 교체, 실제 발사(구성 ID별 수와 x·z 위치)
     public bool HasLoadout;
+
+    /// <summary>습격 시작 휴대 총의 가치(달러, 모듈 재화). 휴대 총 코드가 없으면 null.</summary>
+    public (int Dollars, int Credits)? LoadoutValue;
     public int WeaponChanges;
     public readonly Dictionary<string, int> Shots = new(StringComparer.Ordinal);
     public int ShotsWithoutId;
