@@ -81,6 +81,9 @@ public sealed class GameAnalytics
     private const int TOP_LIST_SIZE = 15;
     private const int MAX_REPLAY_RAIDS = 300;
 
+    /// <summary>습격 결과 로그 뒤 이 시간(초) 안에 같은 씬에서 온 습격 이벤트는 끝난 습격에 붙인다(늦게 기록된 블록 파괴 등).</summary>
+    private const double LATE_RAID_EVENT_SECONDS = 30;
+
     /// <summary>리플레이 궤적 표본 간격(게임 초). 플레이어 상태는 초당 50회라 그대로 보내면 너무 크다.</summary>
     private const double REPLAY_STEP_SECONDS = 0.2;
     private const string UNKNOWN = "(미기록)";
@@ -382,6 +385,7 @@ public sealed class GameAnalytics
         InsightTracker insights = new(d.Insights);
         (DateTime At, string Scene)? openWorkbench = null;
         RaidDigest? raid = null;
+        (RaidDigest Raid, DateTime At)? ended = null;
         int? shopDay = null;
 
         void EnterWorkbench(DateTime at, string scene)
@@ -482,10 +486,21 @@ public sealed class GameAnalytics
                         Day = ReadDouble(data, "day") is double startDay && startDay >= 0 ? (int)startDay : shopDay,
                     };
                     d.Raids.Add(raid);
+                    ended = null;
                     insights.RaidStart(at, raid.Scene, data);
                 }
                 else
                 {
+                    if (raid == null && ended is { } last && last.Raid.Scene == entry.Scene
+                        && (at - last.At).TotalSeconds <= LATE_RAID_EVENT_SECONDS)
+                    {
+                        // 결과 로그 뒤에 늦게 온 같은 씬의 이벤트는 새 습격이 아니라 방금 끝난 습격의 것이다
+                        // (게임이 블록 파괴 로그를 모았다가 결과 기록·씬 종료 때 한꺼번에 남긴다)
+                        ApplyRaidEvent(last.Raid, name, data);
+                        weapons.RaidEvent(last.Raid, name, data);
+                        continue;
+                    }
+
                     insights.RaidEvent(entry.Scene, name, data);
                     if (raid == null)
                     {
@@ -514,6 +529,7 @@ public sealed class GameAnalytics
                     raid.MaterialCrateCredits = ReadDouble(data, "materialCrateCredits");
                     raid.ModuleRewards.AddRange(ReadStrings(data, "moduleCrateRewards"));
                     insights.RaidEnd(at, data);
+                    ended = (raid, at);
                     raid = null;
                 }
             }

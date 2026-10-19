@@ -1058,11 +1058,14 @@ const stageColor = (scene) => {
   return STAGE_COLORS[(i < 0 ? state.data.stages.length + 1 : i) % STAGE_COLORS.length];
 };
 
+/** 연습 습격: 결과·시작 로그의 training, 이 필드가 없는 이전 로그는 튜토리얼 습격 씬. */
+const isTraining = (r) => r.training === true || (r.training == null && r.stage === "Tutorial_WoodenHouse");
+
 function renderDayStage() {
   const v = heatVersion();
   const el = $("c-daystage"), grid = $("c-daystage-grid");
   if (!v) { el.innerHTML = grid.innerHTML = emptyBox("버전을 선택하세요."); return; }
-  const raids = v.raids.filter((r) => r.day != null && !r.training && r.stage && r.stage !== "(미기록)");
+  const raids = v.raids.filter((r) => r.day != null && !isTraining(r) && r.stage && r.stage !== "(미기록)");
   if (!raids.length) { el.innerHTML = grid.innerHTML = emptyBox(v.version + " — 일차를 아는 습격이 없습니다."); return; }
   const days = [...new Set(raids.map((r) => r.day))].sort((a, b) => a - b);
   const stages = stageOrder(raids.map((r) => r.stage));
@@ -1082,10 +1085,12 @@ function renderDayStage() {
       const n = list.filter((r) => r.stage === st).length;
       if (!n) return;
       const h = plotH * (count ? n / scaleMax : n / list.length);
-      const ok = list.filter((r) => r.stage === st && r.survived === true).length;
+      const withEnd = list.filter((r) => r.stage === st && r.survived != null);
+      const ok = withEnd.filter((r) => r.survived === true && r.exit !== "ending_quit").length;
       // 위로 쌓고, 조각 사이 2px 틈
       s += '<rect x="' + x + '" y="' + (y - h) + '" width="' + bw + '" height="' + Math.max(1, h - 2) + '" rx="2" fill="' + stageColor(st) + '" data-tip="' +
-        esc(v.version + " · " + dayLabel(d) + " · " + stageName(st) + "\n" + pct(n / list.length) + " (" + n + " / " + list.length + "회)\n탈출 성공 " + pct(ratio(ok, n))) + '"/>';
+        esc(v.version + " · " + dayLabel(d) + " · " + stageName(st) + "\n" + pct(n / list.length) + " (" + n + " / " + list.length + "회)\n탈출 성공 " + pct(ratio(ok, withEnd.length)) +
+        " (결과 " + withEnd.length + "회)") + '"/>';
       y -= h;
     });
     s += '<text x="' + (left + groupW * c + groupW / 2) + '" y="' + (H - 8) + '" text-anchor="middle">' + esc(dayLabel(d)) + "</text>";
@@ -1126,7 +1131,7 @@ function renderDayStage() {
 
 // ─── 습격 경제 ───
 function renderRaidEconomy(vs) {
-  const raidsOf = (v) => v.raids.filter((r) => !r.training && (r.entryCost != null || r.dollar != null || r.spawnedModule != null));
+  const raidsOf = (v) => v.raids.filter((r) => !isTraining(r) && (r.entryCost != null || r.dollar != null || r.spawnedModule != null));
   const evs = vs.filter((v) => raidsOf(v).length || (v.nights || []).length);
   const ids = ["c-raidnet-stage", "c-raidnet-day", "c-recovery", "c-raidskip", "c-raidloss", "c-firstclear"];
   if (!evs.length) {
@@ -1508,7 +1513,7 @@ function renderGeneral(vs) {
   const raidMoney = (v) => {
     const m = new Map();
     v.raids.forEach((r) => {
-      if (r.day == null || r.dollar == null || r.training) return;
+      if (r.day == null || r.dollar == null || isTraining(r)) return;
       const key = r.s + ":" + r.day, cur = m.get(key) || { reward: 0, net: 0 };
       cur.reward += r.dollar;
       cur.net += r.dollar - (r.entryCost || 0);
