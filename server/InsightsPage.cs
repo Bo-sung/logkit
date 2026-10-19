@@ -212,8 +212,9 @@ public static class InsightsPage
       <div><h3>일차별 수익 분포</h3>
         <p class="sub" style="margin:0">플레이어의 그날 수익 · 플레이어-일차 1개 = 1</p></div>
       <select id="revmode">
-        <option value="sales">총기 판매 금액</option>
-        <option value="all">판매 + 그날 밤 습격 보상</option>
+        <option value="sales">상점 판매</option>
+        <option value="raid">습격 보상</option>
+        <option value="all">합산 (판매 + 그날 밤 습격 보상)</option>
       </select>
     </div>
     <div id="c-revenue" class="chart" style="margin-top:8px"></div>
@@ -388,7 +389,8 @@ public static class InsightsPage
 플레이어   System / 씬 시작·새 게임 시작·저장 게임 시작의 saveId. 같은 주문(orderId)은 여러 세션에 기록돼도 하나로 합침
 튜토리얼   Tutorial / step_started·step_completed(duration, debugSkipped)·tutorial_skipped·tutorial_ended(reason).
            끝 기록 없이 끝난 진행은 마지막으로 시작한 단계에서 멈춘 것으로 봄
-수익       Shop / weapon_sold price 합 (+ 선택 시 습격 종료의 moduleCrateCredits + materialCrateCredits)
+수익       상점 판매 = Shop / weapon_sold price 합, 습격 보상 = 그날 밤 습격 종료의 moduleCrateCredits + materialCrateCredits 합,
+           합산 = 둘의 합 (드롭다운으로 선택)
 조건 만족  Shop / weapon_sold satisfied = true 횟수
 종결 총기  공방 빌드: Shop / workbench_exited 코드의 파츠. 주문의 requestIds(order_created)에 tag/flamethrower·tag/gravity-gun이
            있으면 그 빌드는 발열·중력 조건에서 뺌. 습격 총: NightRaid / 습격 시작 코드. 도달 = 그 일차 이후 낮·밤 구간 또는 상점 기록
@@ -1220,15 +1222,18 @@ function scatter(el, vs, pointsOf, guide, xFmt, yFmt, tipOf) {
 // ─── 일반 통계 ───
 function renderGeneral(vs) {
   const days = daysOf(vs, (v) => v.days);
-  const withRaid = $("revmode").value === "all";
+  const revMode = $("revmode").value;
   const credits = (v) => {
     const m = new Map();
     v.raids.forEach((r) => { if (r.day != null && r.credits != null) m.set(r.s + ":" + r.day, (m.get(r.s + ":" + r.day) || 0) + r.credits); });
     return m;
   };
   const creditCache = new Map(vs.map((v) => [v.version, credits(v)]));
-  boxV($("c-revenue"), vs, days, (v, d) => v.days.filter((x) => x.day === d)
-    .map((x) => x.salesSum + (withRaid ? creditCache.get(v.version).get(x.s + ":" + x.day) || 0 : 0)), money, dayLabel);
+  // 상점 판매 = weapon_sold 합, 습격 보상 = 그날 밤 습격 종료 크레딧 합, 합산 = 둘의 합
+  boxV($("c-revenue"), vs, days, (v, d) => v.days.filter((x) => x.day === d).map((x) => {
+    const raid = creditCache.get(v.version).get(x.s + ":" + x.day) || 0;
+    return revMode === "sales" ? x.salesSum : revMode === "raid" ? raid : x.salesSum + raid;
+  }), money, dayLabel);
   boxV($("c-satisfied"), vs, days, (v, d) => v.days.filter((x) => x.day === d).map((x) => x.satisfied), (x) => num(x, 1) + "회", dayLabel);
   boxV($("c-price"), vs, days, (v, d) => v.days.filter((x) => x.day === d && x.priced > 0).map((x) => x.salesSum / x.priced), money, dayLabel);
   const orderDays = daysOf(vs, (v) => v.orders.filter((o) => o.workbenchSeconds != null));
