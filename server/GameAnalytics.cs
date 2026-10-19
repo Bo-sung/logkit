@@ -631,6 +631,30 @@ public sealed class GameAnalytics
         }
     }
 
+    /// <summary>구간 누적(5초 단위)을 표본이 있는 구간의 평균 상태 목록으로 바꾼다.</summary>
+    private static List<TimelinePoint> TimelinePoints(TimelineAccumulator?[] timeline)
+    {
+        List<TimelinePoint> points = new();
+        for (int i = 0; i < timeline.Length; i++)
+        {
+            if (timeline[i] is { } acc)
+            {
+                points.Add(new TimelinePoint
+                {
+                    Sec = i * TimelineBinSeconds,
+                    Health = acc.Avg(0),
+                    ModuleCrates = acc.Avg(1),
+                    MaterialCrates = acc.Avg(2),
+                    Tanks = acc.Avg(3),
+                    Helicopters = acc.Avg(4),
+                    Samples = acc.Samples,
+                });
+            }
+        }
+
+        return points;
+    }
+
     private static float Round(double value) => (float)Math.Round(value, 2);
 
     /// <summary>
@@ -681,6 +705,7 @@ public sealed class GameAnalytics
         Dictionary<string, StageAccumulator> stages = new(StringComparer.Ordinal);
         Dictionary<string, int> moduleRewards = new(StringComparer.Ordinal);
         TimelineAccumulator?[] timeline = new TimelineAccumulator?[MAX_TIMELINE_BINS];
+        Dictionary<string, TimelineAccumulator?[]> stageTimelines = new(StringComparer.Ordinal);
         Dictionary<(string Scene, int? Day), int[]> heat = new();
         List<RaidDigest> raids = new();
         int satisfied = 0, withSatisfied = 0;
@@ -734,9 +759,16 @@ public sealed class GameAnalytics
                 Increment(moduleRewards, reward);
             }
 
+            if (!stageTimelines.TryGetValue(raid.Scene, out TimelineAccumulator?[]? stageTimeline))
+            {
+                stageTimeline = new TimelineAccumulator?[MAX_TIMELINE_BINS];
+                stageTimelines[raid.Scene] = stageTimeline;
+            }
+
             foreach (KeyValuePair<int, TimelineAccumulator> pair in raid.Timeline)
             {
                 (timeline[pair.Key] ??= new TimelineAccumulator()).Merge(pair.Value);
+                (stageTimeline[pair.Key] ??= new TimelineAccumulator()).Merge(pair.Value);
             }
 
             if (raid.Points.Count > 0)
@@ -779,22 +811,12 @@ public sealed class GameAnalytics
         v.Stages = stages.OrderBy(p => p.Key, StringComparer.Ordinal).Select(p => p.Value.Totals.ToStat(p.Key)).ToList();
         v.ModuleRewards = Top(moduleRewards);
 
-        for (int i = 0; i < timeline.Length; i++)
-        {
-            if (timeline[i] is { } acc)
-            {
-                v.Timeline.Add(new TimelinePoint
-                {
-                    Sec = i * TimelineBinSeconds,
-                    Health = acc.Avg(0),
-                    ModuleCrates = acc.Avg(1),
-                    MaterialCrates = acc.Avg(2),
-                    Tanks = acc.Avg(3),
-                    Helicopters = acc.Avg(4),
-                    Samples = acc.Samples,
-                });
-            }
-        }
+        v.Timeline = TimelinePoints(timeline);
+        v.StageTimelines = stageTimelines
+            .Select(p => new StageTimeline { Scene = p.Key, Points = TimelinePoints(p.Value) })
+            .Where(t => t.Points.Count > 0)
+            .OrderBy(t => t.Scene, StringComparer.Ordinal)
+            .ToList();
 
         foreach (KeyValuePair<(string Scene, int? Day), int[]> pair in heat
             .OrderBy(p => p.Key.Scene, StringComparer.Ordinal).ThenBy(p => p.Key.Day ?? -1))

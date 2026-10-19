@@ -116,7 +116,17 @@ public sealed class VersionAnalytics
     /// <summary>종료 이벤트 moduleCrateRewards의 모듈 보상 ID 빈도. 사망 후 실제 지급 여부는 알 수 없다.</summary>
     public List<KeyCount> ModuleRewards { get; set; } = new();
     public List<TimelinePoint> Timeline { get; set; } = new();
+
+    /// <summary>스테이지(습격 씬)별 습격 게임 시간 평균 상태. Timeline은 모든 스테이지 합계다.</summary>
+    public List<StageTimeline> StageTimelines { get; set; } = new();
     public List<Heatmap> Heatmaps { get; set; } = new();
+}
+
+/// <summary>스테이지 하나의 습격 게임 시간별 평균 상태.</summary>
+public sealed class StageTimeline
+{
+    public string Scene { get; set; } = string.Empty;
+    public List<TimelinePoint> Points { get; set; } = new();
 }
 
 /// <summary>습격 구간 합계. Scene이 비면 전체 스테이지 합계다.</summary>

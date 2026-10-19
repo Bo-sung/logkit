@@ -93,6 +93,7 @@ public static class AnalyticsPage
   <section class="card">
     <h3>습격 게임 시간별 평균 상태</h3>
     <p class="sub">플레이어 상태의 data_json.time을 구간으로 묶은 평균
+      <select id="tlstage" style="padding:2px 6px"></select>
       <select id="tlmetric" style="padding:2px 6px">
         <option value="health">체력</option><option value="moduleCrates">남은 모듈 상자</option>
         <option value="materialCrates">남은 재료 상자</option><option value="tanks">탱크 수</option>
@@ -241,9 +242,17 @@ function renderRaid(vs) {
 
   const metric = $("tlmetric").value;
   const metricName = $("tlmetric").selectedOptions[0].textContent;
-  lines($("c-timeline"), vs, (v) => v.timeline.map((t) => ({ x: t.sec, y: t[metric], n: t.samples })),
+  // 스테이지: 전체 합계 또는 한 스테이지
+  const tlStages = [...new Set(vs.flatMap((v) => (v.stageTimelines || []).map((t) => t.scene)))].sort();
+  const tlSel = $("tlstage"), tlPrev = tlSel.value || loadPrefs().tlstage || "";
+  tlSel.innerHTML = '<option value="">전체 스테이지</option>' + tlStages.map((s) => '<option value="' + esc(s) + '">' + esc(s) + "</option>").join("");
+  if (tlStages.includes(tlPrev)) tlSel.value = tlPrev;
+  const tlStage = tlSel.value;
+  const pointsOf = (v) => tlStage ? ((v.stageTimelines || []).find((t) => t.scene === tlStage) || { points: [] }).points : v.timeline;
+  lines($("c-timeline"), vs, (v) => pointsOf(v).map((t) => ({ x: t.sec, y: t[metric], n: t.samples })),
     (x) => Math.round(x) + "s", (y) => num(y, 2),
-    (v, p) => v.version + " · 게임 " + p.x + "~" + (p.x + state.data.timelineBinSeconds) + "초\n" + metricName + " 평균 " + num(p.y, 2) + " (표본 " + num(p.n, 0) + ")");
+    (v, p) => v.version + (tlStage ? " · " + tlStage : "") + " · 게임 " + p.x + "~" + (p.x + state.data.timelineBinSeconds) + "초\n" +
+      metricName + " 평균 " + num(p.y, 2) + " (표본 " + num(p.n, 0) + ")");
 
   let h = '<div class="tablewrap"><table><thead><tr><th>스테이지</th><th>버전</th><th>습격</th><th>종료 기록</th><th>생존 비율</th>' +
     "<th>평균 소요</th><th>습격당 블록 파괴</th><th>습격당 적 생성</th><th>습격당 적 발견</th><th>습격당 적 처치</th>" +
@@ -339,6 +348,7 @@ function render() {
 }
 
 $("tlmetric").onchange = render;
+$("tlstage").onchange = () => { savePrefs({ tlstage: $("tlstage").value }); render(); };
 $("stage").onchange = () => renderHeat(selectedVersions());
 $("heatday").onchange = () => renderHeat(selectedVersions());
 initPage();
