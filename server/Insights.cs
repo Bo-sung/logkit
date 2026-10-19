@@ -94,6 +94,21 @@ internal sealed class InsightTracker
                     failed.Balance = Number(data, "balance");
                     break;
 
+                case GameEvents.RaidFirstClear:
+                case GameEvents.RaidSkipped:
+                    bool skipped = name == GameEvents.RaidSkipped;
+                    _digest.Nights.Add(new InsightNight
+                    {
+                        Kind = skipped ? "skipped" : "first_clear",
+                        Day = Number(data, "day") is double nightDay && nightDay >= 0 ? (int)nightDay : _day,
+                        Stage = skipped ? null : Text(data, "scene"),
+                        BonusAdded = skipped ? null : Number(data, "saleBonusAdded"),
+                        BonusTotal = skipped ? null : Number(data, "saleBonusTotal"),
+                        Credits = skipped ? Number(data, "moduleCreditsGranted") : null,
+                        SaveId = _saveId,
+                    });
+                    break;
+
                 case GameEvents.EndingChoice:
                     InsightEnding choice = Ending("choice", data);
                     choice.Type = Text(data, "endingType");
@@ -357,6 +372,12 @@ internal sealed class InsightTracker
             SaveId = _saveId,
             Penetration = Number(data, "penetration"),
             Explosion = Number(data, "explosion"),
+            EntryCost = Number(data, "entryCost"),
+            Training = Bool(data, "training"),
+            SpawnedModule = Number(data, "spawnedModuleCrates"),
+            SpawnedMaterial = Number(data, "spawnedMaterialCrates"),
+            ReplacedModule = Number(data, "replacedModuleSpots"),
+            MaterialPerCrate = Number(data, "materialPerCrate"),
         };
         _digest.Raids.Add(_raid);
         if (Layout(data) is { } loadout)
@@ -430,6 +451,11 @@ internal sealed class InsightTracker
 
         _raid.Survived = Bool(data, "survived");
         _raid.Exit = Text(data, "exitReason");
+        _raid.Dollar = Number(data, "dollarReward");
+        _raid.Applied = Bool(data, "rewardsApplied");
+        _raid.Material = Number(data, "materialCrateCredits");
+        _raid.Pickups = Number(data, "materialPickups");
+        _raid.Training ??= Bool(data, "training");
         if (data.ValueKind == JsonValueKind.Object && data.TryGetProperty("moduleCrateRewards", out JsonElement rewards)
             && rewards.ValueKind == JsonValueKind.Array)
         {
@@ -622,6 +648,7 @@ internal sealed class InsightDigest
     public readonly List<InsightTutorial> Tutorials = new();
     public readonly List<InsightSpin> Spins = new();
     public readonly List<InsightEnding> Endings = new();
+    public readonly List<InsightNight> Nights = new();
 
     /// <summary>세이브별 이 세션의 플레이 시간(일시정지 제외, 초).</summary>
     public Dictionary<string, double> SaveSeconds = new(StringComparer.Ordinal);
@@ -697,6 +724,7 @@ internal static class InsightPlayers
 
             v.Raids.AddRange(digest.Raids.Select(r => r.ForSession(Player(r.SaveId))));
             v.Spins.AddRange(digest.Spins.Select(x => x.ForSession(Player(x.SaveId), session)));
+            v.Nights.AddRange(digest.Nights.Select(x => x.ForSession(Player(x.SaveId))));
             v.ShopSessions += digest.Days.Count > 0 || digest.Phases.Count > 0 ? 1 : 0;
 
             // 엔딩의 Play = 같은 플레이어의 이전 세션 플레이 시간 합 + 이 세션 안의 시간(세션은 시작 시각 순)
@@ -901,9 +929,35 @@ public sealed class InsightVersion
     public List<InsightTutorial> Tutorials { get; set; } = new();
     public List<InsightSpin> Spins { get; set; } = new();
     public List<InsightEnding> Endings { get; set; } = new();
+    public List<InsightNight> Nights { get; set; } = new();
 
     /// <summary>상점 일차·구간 기록이 있는 세션 수(슬롯머신 이용률의 분모).</summary>
     public int ShopSessions { get; set; }
+}
+
+/// <summary>
+/// 습격 밖의 밤 이벤트. Kind = skipped(Game / raid_skipped, 습격 없이 다음 날로 — Credits = 지급한 모듈 재화),
+/// first_clear(Game / raid_first_clear, 구역 첫 클리어 확정 — Stage, BonusAdded·BonusTotal = 판매 보너스 비율).
+/// </summary>
+public sealed class InsightNight
+{
+    public int S { get; set; }
+    public string Kind { get; set; } = string.Empty;
+    public int? Day { get; set; }
+    public string? Stage { get; set; }
+    public double? BonusAdded { get; set; }
+    public double? BonusTotal { get; set; }
+    public double? Credits { get; set; }
+
+    [System.Text.Json.Serialization.JsonIgnore]
+    internal string SaveId { get; set; } = string.Empty;
+
+    internal InsightNight ForSession(int s)
+    {
+        InsightNight copy = (InsightNight)MemberwiseClone();
+        copy.S = s;
+        return copy;
+    }
 }
 
 /// <summary>
@@ -1172,6 +1226,24 @@ public sealed class InsightRaid
     /// <summary>습격 시작에 기록된 총의 관통·폭발 수치(총구 중 최댓값, 방사 절반 반영). 이후 빌드부터.</summary>
     public double? Penetration { get; set; }
     public double? Explosion { get; set; }
+
+    /// <summary>습격 시작의 입장 비용(entryCost)과 연습 습격 여부(training). 이후 빌드부터.</summary>
+    public double? EntryCost { get; set; }
+    public bool? Training { get; set; }
+
+    /// <summary>습격 시작 때 만든 모듈·재료 상자 수, 이미 해금해 재료 상자로 바뀐 모듈 자리 수, 재료 상자 하나의 모듈 재화.</summary>
+    public double? SpawnedModule { get; set; }
+    public double? SpawnedMaterial { get; set; }
+    public double? ReplacedModule { get; set; }
+    public double? MaterialPerCrate { get; set; }
+
+    /// <summary>습격 종료의 dollarReward(지갑에 들어간 달러, 탈출 성공 때만 0 초과)와 rewardsApplied(획득물이 공방에 남는지).</summary>
+    public double? Dollar { get; set; }
+    public bool? Applied { get; set; }
+
+    /// <summary>습격 종료의 materialCrateCredits(주운 재료 재화 합)와 materialPickups(재료 픽업 수). 반영 여부와 관계없이 남는다.</summary>
+    public double? Material { get; set; }
+    public double? Pickups { get; set; }
 
     /// <summary>습격 종료의 exitReason(extracted, died, ending_quit = 엔드 상자 END 화면에서 그만하기). 이전 빌드는 빈 문자열.</summary>
     public string Exit { get; set; } = string.Empty;

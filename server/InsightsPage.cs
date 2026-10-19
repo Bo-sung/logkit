@@ -210,10 +210,11 @@ public static class InsightsPage
   <section class="card">
     <div class="row" style="justify-content:space-between">
       <div><h3>일차별 수익 분포</h3>
-        <p class="sub" style="margin:0">플레이어의 그날 수익 · 플레이어-일차 1개 = 1</p></div>
+        <p class="sub" style="margin:0">플레이어의 그날 수익 · 플레이어-일차 1개 = 1 · 습격 보상은 dollarReward를 남기는 빌드부터, 연습 습격 제외</p></div>
       <select id="revmode">
         <option value="sales">상점 판매</option>
-        <option value="raid">습격 보상</option>
+        <option value="raid">습격 보상 (지갑에 들어간 달러)</option>
+        <option value="raidnet">습격 순수익 (보상 − 입장 비용)</option>
         <option value="all">합산 (판매 + 그날 밤 습격 보상)</option>
       </select>
     </div>
@@ -243,6 +244,65 @@ public static class InsightsPage
     <p class="sub">그 모듈이 들어간 총으로 나간 습격 / 그날 밤 총을 확인한 습격</p>
     <div class="row" style="margin:6px 0"><span class="muted">적음</span><span class="ramp"></span><span class="muted">많음</span></div>
     <div id="c-modules" class="cells"></div>
+  </section>
+
+  <div class="section">습격 경제</div>
+
+  <section class="card wide">
+    <h3>습격 경제 요약</h3>
+    <p class="sub">연습 습격 제외 · 입장 비용·상자 수·달러 보상을 남기는 빌드부터 · 순수익 = dollarReward − entryCost(사망하면 −입장 비용) ·
+      회수율은 사망한 습격도 포함(주운 양 기준) · 사망 손실 = 사망한 습격에서 주웠다가 잃은 재료 재화</p>
+    <div id="t-raideco"></div>
+  </section>
+
+  <section class="card">
+    <h3>스테이지별 습격 순수익</h3>
+    <p class="sub">습격 1회 = 1 · dollarReward − entryCost</p>
+    <div id="c-raidnet-stage" class="chart"></div>
+  </section>
+
+  <section class="card">
+    <h3>일차별 습격 순수익</h3>
+    <p class="sub">습격 1회 = 1 · 습격 시작의 day 기준</p>
+    <div id="c-raidnet-day" class="chart"></div>
+  </section>
+
+  <section class="card">
+    <div class="row" style="justify-content:space-between">
+      <h3>스테이지별 상자 회수율</h3>
+      <select id="recmetric">
+        <option value="module">모듈 상자 (주운 해금 모듈 / 만든 모듈 상자)</option>
+        <option value="material">재료 상자 (주운 재화 / 상자 수 × 상자당 재화)</option>
+      </select>
+    </div>
+    <p class="sub">스테이지의 모든 습격 합으로 계산 · 툴팁에 탈출 성공 습격만의 값</p>
+    <div id="c-recovery" class="chart"></div>
+  </section>
+
+  <section class="card">
+    <h3>일차별 습격 vs 건너뛴 밤<span class="unitsw" data-unit="raidskip"></span></h3>
+    <p class="sub">플레이어-밤 1개 = 1 · 습격함 = 그날 밤 연습이 아닌 습격 시작이 있음, 건너뜀 = Game / raid_skipped(모듈 재화 100 지급)</p>
+    <div id="c-raidskip" class="chart"></div>
+  </section>
+
+  <section class="card">
+    <div class="row" style="justify-content:space-between">
+      <h3>사망으로 잃은 획득물</h3>
+      <select id="lossmetric">
+        <option value="material">재료 재화 (materialCrateCredits)</option>
+        <option value="pickups">재료 픽업 수 (materialPickups)</option>
+        <option value="modules">해금 모듈 수 (moduleCrateRewards)</option>
+      </select>
+    </div>
+    <p class="sub">사망한 습격 1회 = 1 · 사망하면 모듈 재화·해금이 출발 상태로 돌아가고 달러를 받지 못함</p>
+    <div id="c-raidloss" class="chart"></div>
+  </section>
+
+  <section class="card">
+    <h3>구역 첫 클리어 일차</h3>
+    <p class="sub">Game / raid_first_clear 1건 = 1 · 그 구역을 처음 클리어하고 공방에 돌아온 일차 · 툴팁 평균 = 평균 일차,
+      요약 표에 판매 보너스</p>
+    <div id="c-firstclear" class="chart"></div>
   </section>
 
   <div class="section">엔딩</div>
@@ -389,8 +449,12 @@ public static class InsightsPage
 플레이어   System / 씬 시작·새 게임 시작·저장 게임 시작의 saveId. 같은 주문(orderId)은 여러 세션에 기록돼도 하나로 합침
 튜토리얼   Tutorial / step_started·step_completed(duration, debugSkipped)·tutorial_skipped·tutorial_ended(reason).
            끝 기록 없이 끝난 진행은 마지막으로 시작한 단계에서 멈춘 것으로 봄
-수익       상점 판매 = Shop / weapon_sold price 합, 습격 보상 = 그날 밤 습격 종료의 moduleCrateCredits + materialCrateCredits 합,
-           합산 = 둘의 합 (드롭다운으로 선택)
+수익       상점 판매 = Shop / weapon_sold price 합, 습격 보상 = 그날 밤 습격 결과의 dollarReward 합(연습 제외),
+           습격 순수익 = dollarReward − 습격 시작의 entryCost, 합산 = 판매 + 습격 보상 (드롭다운으로 선택)
+습격 경제  습격 시작의 entryCost·training·spawnedModuleCrates·spawnedMaterialCrates·materialPerCrate와 결과 로그의
+           dollarReward·rewardsApplied·moduleCrateRewards·materialCrateCredits·materialPickups. 연습 습격(training)은 모두 뺌.
+           모듈 회수율 = 주운 해금 모듈 수 / 만든 모듈 상자 수, 재료 회수율 = 주운 재료 재화 / (재료 상자 수 × 상자당 재화).
+           건너뛴 밤 = Game / raid_skipped, 구역 첫 클리어 = Game / raid_first_clear
 조건 만족  Shop / weapon_sold satisfied = true 횟수
 종결 총기  공방 빌드: Shop / workbench_exited 코드의 파츠. 주문의 requestIds(order_created)에 tag/flamethrower·tag/gravity-gun이
            있으면 그 빌드는 발열·중력 조건에서 뺌. 습격 총: NightRaid / 습격 시작 코드. 도달 = 그 일차 이후 낮·밤 구간 또는 상점 기록
@@ -517,13 +581,14 @@ function boxV(el, vs, cats, valuesOf, fmt, catLabel = (c) => String(c)) {
 function boxH(el, vs, cats, valuesOf, fmt) {
   const rows = cats.map((c) => ({ c, boxes: vs.map((v) => boxStats(valuesOf(v, c))) })).filter((r) => r.boxes.some(Boolean));
   if (!rows.length) { el.innerHTML = emptyBox("기록된 데이터가 없습니다."); return; }
-  let max = 0;
-  rows.forEach((r) => r.boxes.forEach((b) => { if (b) max = Math.max(max, b.hi, ...b.out); }));
-  const tk = ticks(0, Math.max(1, max)), top = 18;
-  max = tk[tk.length - 1];
+  // 0을 포함한 범위(음수 값이 있으면 왼쪽으로 늘린다)
+  let min = 0, max = 0;
+  rows.forEach((r) => r.boxes.forEach((b) => { if (b) { min = Math.min(min, b.lo, ...b.out); max = Math.max(max, b.hi, ...b.out); } }));
+  const tk = ticks(min, Math.max(min + 1, max)), top = 18;
+  min = tk[0]; max = tk[tk.length - 1];
   const W = widthOf(el), labelW = 190, plotW = W - labelW - 16, bh = 10, gap = 3, pad = 10;
   const rowH = vs.length * bh + (vs.length - 1) * gap + pad, H = top + rows.length * rowH + 4;
-  const sx = (x) => labelW + x / max * plotW;
+  const sx = (x) => labelW + (x - min) / (max - min) * plotW;
   let s = "";
   tk.forEach((t) => {
     s += '<line x1="' + sx(t) + '" x2="' + sx(t) + '" y1="' + top + '" y2="' + (H - 2) + '" stroke="' + (t === 0 ? "var(--axis)" : "var(--grid)") + '"/>';
@@ -548,7 +613,7 @@ function boxH(el, vs, cats, valuesOf, fmt) {
 }
 
 /** 일차 × 버전 100% 누적 막대. partsOf(v, day) → { yes, total }. 아래(버전 색) = yes, 위(회색) = 나머지. */
-function stacked100(el, vs, days, partsOf, yesName, noName, unitKey) {
+function stacked100(el, vs, days, partsOf, yesName, noName, unitKey, totalName = "실패") {
   const rows = vs.map((v) => ({ v, cells: days.map((d) => partsOf(v, d)) })).filter((r) => r.cells.some((c) => c.total > 0));
   if (!rows.length || !days.length) { el.innerHTML = emptyBox("기록된 데이터가 없습니다."); return; }
   const W = widthOf(el), H = 250, left = 48, top = 10, bottom = 28, plotW = W - left - 8, plotH = H - top - bottom;
@@ -576,7 +641,7 @@ function stacked100(el, vs, days, partsOf, yesName, noName, unitKey) {
       }
       s += '<rect x="' + (x - gap / 2) + '" y="' + top + '" width="' + (bw + gap) + '" height="' + plotH + '" fill="transparent" data-tip="' +
         esc(r.v.version + " · " + dayLabel(d) + "\n" + yesName + " " + pct(share) + " (" + cell.yes + ")\n" + noName + " " +
-          pct(1 - share) + " (" + (cell.total - cell.yes) + ")\n실패 " + cell.total + "회") + '"/>';
+          pct(1 - share) + " (" + (cell.total - cell.yes) + ")\n" + totalName + " " + cell.total + "회") + '"/>';
     });
     s += '<text x="' + (left + groupW * c + groupW / 2) + '" y="' + (H - 8) + '" text-anchor="middle">' + esc(dayLabel(d)) + "</text>";
   });
@@ -941,6 +1006,89 @@ function renderPenExp() {
   }, "관통 모듈 수", "");
 }
 
+// ─── 습격 경제 ───
+function renderRaidEconomy(vs) {
+  const raidsOf = (v) => v.raids.filter((r) => !r.training && (r.entryCost != null || r.dollar != null || r.spawnedModule != null));
+  const evs = vs.filter((v) => raidsOf(v).length || (v.nights || []).length);
+  const ids = ["c-raidnet-stage", "c-raidnet-day", "c-recovery", "c-raidskip", "c-raidloss", "c-firstclear"];
+  if (!evs.length) {
+    $("t-raideco").innerHTML = emptyBox("습격 보상 기록이 없습니다. 입장 비용·달러 보상(entryCost, dollarReward)을 남기는 빌드부터 쌓입니다.");
+    ids.forEach((id) => { $(id).innerHTML = ""; });
+    return;
+  }
+  const net = (r) => (r.dollar || 0) - (r.entryCost || 0);
+  const known = (v) => raidsOf(v).filter((r) => r.dollar != null);
+  const sumOf2 = (list, f) => list.reduce((a, x) => a + (f(x) || 0), 0);
+  const recovery = (list, kind) => kind === "module"
+    ? ratio(sumOf2(list, (r) => (r.rewards || []).length), sumOf2(list, (r) => r.spawnedModule))
+    : ratio(sumOf2(list, (r) => r.material), sumOf2(list, (r) => (r.spawnedMaterial || 0) * (r.materialPerCrate || 0)));
+  const withCrates = (v, kind) => raidsOf(v).filter((r) => kind === "module" ? r.spawnedModule > 0 : r.spawnedMaterial > 0 && r.materialPerCrate > 0);
+
+  // 요약 표
+  let rows = "";
+  evs.forEach((v) => {
+    const all = raidsOf(v), money2 = known(v), died = all.filter((r) => r.exit === "died" || r.survived === false);
+    const ok = all.filter((r) => r.survived === true && r.exit !== "ending_quit");
+    const nights = v.nights || [], skipped = nights.filter((n) => n.kind === "skipped"), clears = nights.filter((n) => n.kind === "first_clear");
+    const cell = (main, sub) => "<td>" + main + (sub ? ' <span class="muted">' + sub + "</span>" : "") + "</td>";
+    rows += "<tr><td>" + esc(v.version) + "</td>" +
+      cell(all.length + "회", "") +
+      cell(pct(ratio(ok.length, all.length), 0), "") +
+      cell(money(avg(all.filter((r) => r.entryCost != null).map((r) => r.entryCost))), "") +
+      cell(money(avg(money2.filter((r) => r.dollar > 0).map((r) => r.dollar))), "탈출 시") +
+      cell(signedMoney(avg(money2.map(net))), "중앙 " + signedMoney(median(money2.map(net)))) +
+      cell(pct(ratio(money2.filter((r) => net(r) > 0).length, money2.length), 0), "") +
+      cell(pct(recovery(withCrates(v, "module"), "module"), 0), "") +
+      cell(pct(recovery(withCrates(v, "material"), "material"), 0), "") +
+      cell(num(avg(died.filter((r) => r.material != null).map((r) => r.material)), 0), died.length + "회 사망") +
+      cell(skipped.length + "밤", "") +
+      cell(clears.length + "건", clears.length ? "보너스 +" + num(sumOf2(clears, (n) => n.bonusAdded), 2) : "") + "</tr>";
+  });
+  $("t-raideco").innerHTML = '<div class="tablewrap"><table><tr><th>버전</th><th>습격</th><th>탈출 성공</th><th>평균 입장 비용</th><th>평균 달러 보상</th>' +
+    "<th>평균 순수익</th><th>이득 본 습격</th><th>모듈 회수율</th><th>재료 회수율</th><th>사망 손실 재료</th><th>건너뛴 밤</th><th>첫 클리어</th></tr>" +
+    rows + "</table></div>";
+
+  // 순수익: 스테이지별·일차별
+  const stages = [...new Set(evs.flatMap((v) => known(v).map((r) => r.stage)))].sort();
+  boxH($("c-raidnet-stage"), evs, stages.map(stageName), (v, name) => known(v).filter((r) => stageName(r.stage) === name).map(net), signedMoney);
+  const netDays = daysOf(evs, known);
+  boxV($("c-raidnet-day"), evs, netDays, (v, d) => known(v).filter((r) => r.day === d).map(net), signedMoney, dayLabel);
+
+  // 상자 회수율
+  const kind = $("recmetric").value;
+  const recStages = [...new Set(evs.flatMap((v) => withCrates(v, kind).map((r) => r.stage)))].sort();
+  let recMax = 0;
+  const recCell = (v, name) => {
+    const list = withCrates(v, kind).filter((r) => stageName(r.stage) === name);
+    if (!list.length) return null;
+    const r = recovery(list, kind), okList = list.filter((x) => x.survived === true && x.exit !== "ending_quit");
+    return { value: r, label: pct(r, 0), tip: "전체 " + pct(r) + " (습격 " + list.length + "회)\n탈출 성공만 " + pct(recovery(okList, kind)) + " (" + okList.length + "회)" };
+  };
+  evs.forEach((v) => recStages.forEach((s) => { const c = recCell(v, stageName(s)); if (c) recMax = Math.max(recMax, c.value); }));
+  hbars($("c-recovery"), evs, recStages.map(stageName), recCell, Math.max(1, recMax), false, 170);
+
+  // 습격 vs 건너뛴 밤
+  const nightDays = daysOf(evs, (v) => raidsOf(v).concat((v.nights || []).filter((n) => n.kind === "skipped")));
+  stacked100($("c-raidskip"), evs, nightDays, (v, d) => {
+    const raided = new Set(raidsOf(v).filter((r) => r.day === d).map((r) => r.s));
+    const skippedSet = new Set((v.nights || []).filter((n) => n.kind === "skipped" && n.day === d && !raided.has(n.s)).map((n) => n.s));
+    return { yes: raided.size, total: raided.size + skippedSet.size };
+  }, "습격함", "건너뜀", "raidskip", "밤");
+
+  // 사망 손실
+  const loss = $("lossmetric").value;
+  const lossOf = (r) => loss === "material" ? r.material : loss === "pickups" ? r.pickups : (r.rewards ? r.rewards.length : null);
+  const diedOf = (v) => raidsOf(v).filter((r) => (r.exit === "died" || r.survived === false) && lossOf(r) != null);
+  boxV($("c-raidloss"), evs, daysOf(evs, diedOf), (v, d) => diedOf(v).filter((r) => r.day === d).map(lossOf),
+    (x) => num(x, 0) + (loss === "material" ? "" : "개"), dayLabel);
+
+  // 구역 첫 클리어 일차
+  const clearsOf = (v) => (v.nights || []).filter((n) => n.kind === "first_clear" && n.day != null);
+  const clearStages = [...new Set(evs.flatMap((v) => clearsOf(v).map((n) => n.stage)))].sort();
+  boxH($("c-firstclear"), evs, clearStages.map(stageName), (v, name) => clearsOf(v).filter((n) => stageName(n.stage) === name).map((n) => n.day),
+    (x) => num(x, 1) + "일차");
+}
+
 // ─── 엔딩 ───
 const ENDING_TYPES = [["retire", "은퇴"], ["end_chest", "엔드 상자"]];
 const ENDING_KIND = { retire: "retire", end_chest: "chest_opened" };
@@ -1223,17 +1371,27 @@ function scatter(el, vs, pointsOf, guide, xFmt, yFmt, tipOf) {
 function renderGeneral(vs) {
   const days = daysOf(vs, (v) => v.days);
   const revMode = $("revmode").value;
-  const credits = (v) => {
+  // 플레이어-일차별 습격 달러 보상·순수익(연습 제외, dollarReward가 있는 습격만)
+  const raidMoney = (v) => {
     const m = new Map();
-    v.raids.forEach((r) => { if (r.day != null && r.credits != null) m.set(r.s + ":" + r.day, (m.get(r.s + ":" + r.day) || 0) + r.credits); });
+    v.raids.forEach((r) => {
+      if (r.day == null || r.dollar == null || r.training) return;
+      const key = r.s + ":" + r.day, cur = m.get(key) || { reward: 0, net: 0 };
+      cur.reward += r.dollar;
+      cur.net += r.dollar - (r.entryCost || 0);
+      m.set(key, cur);
+    });
     return m;
   };
-  const creditCache = new Map(vs.map((v) => [v.version, credits(v)]));
+  const creditCache = new Map(vs.map((v) => [v.version, raidMoney(v)]));
   // 상점 판매 = weapon_sold 합, 습격 보상 = 그날 밤 습격 종료 크레딧 합, 합산 = 둘의 합
   boxV($("c-revenue"), vs, days, (v, d) => v.days.filter((x) => x.day === d).map((x) => {
-    const raid = creditCache.get(v.version).get(x.s + ":" + x.day) || 0;
-    return revMode === "sales" ? x.salesSum : revMode === "raid" ? raid : x.salesSum + raid;
-  }), money, dayLabel);
+    const raid = creditCache.get(v.version).get(x.s + ":" + x.day);
+    if (revMode === "sales") return x.salesSum;
+    if (revMode === "raid") return raid ? raid.reward : null;
+    if (revMode === "raidnet") return raid ? raid.net : null;
+    return x.salesSum + (raid ? raid.reward : 0);
+  }).filter((x) => x != null), revMode === "raidnet" ? signedMoney : money, dayLabel);
   boxV($("c-satisfied"), vs, days, (v, d) => v.days.filter((x) => x.day === d).map((x) => x.satisfied), (x) => num(x, 1) + "회", dayLabel);
   boxV($("c-price"), vs, days, (v, d) => v.days.filter((x) => x.day === d && x.priced > 0).map((x) => x.salesSum / x.priced), money, dayLabel);
   const orderDays = daysOf(vs, (v) => v.orders.filter((o) => o.workbenchSeconds != null));
@@ -1305,6 +1463,7 @@ function render() {
   renderPenExp();
   renderGeneral(vs);
   renderModules();
+  renderRaidEconomy(vs);
   renderEnding(vs);
   renderSlot(vs);
 }
@@ -1321,7 +1480,7 @@ document.querySelectorAll("#rule input").forEach((inp) => {
 $("withended").checked = !!loadPrefs().withended;
 $("withended").onchange = () => { savePrefs({ withended: $("withended").checked }); renderPhase(); };
 $("tutseq").onchange = () => { savePrefs({ tutseq: $("tutseq").value }); renderTutorial(selectedVersions()); };
-for (const id of ["modmetric", "retrymode", "revmode", "nightmode", "vaultmetric", "balmode", "endsource", "endtype"]) {
+for (const id of ["modmetric", "retrymode", "revmode", "nightmode", "vaultmetric", "balmode", "endsource", "endtype", "recmetric", "lossmetric"]) {
   const saved = loadPrefs()[id];
   if (saved && [...$(id).options].some((o) => o.value === saved)) $(id).value = saved;
   $(id).onchange = () => { savePrefs({ [id]: $(id).value }); render(); };

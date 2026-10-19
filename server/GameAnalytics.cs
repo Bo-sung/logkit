@@ -40,6 +40,8 @@ internal static class GameEvents
     public const string Bankrupt = "bankrupt";                // day, balance, rent — 정산 때 자리세를 못 낸 순간
     public const string RetireCompleted = "retire_completed"; // day, balanceBefore, balanceAfter, outstandingLoans, moduleCredits, endless, firstEnding
     public const string RetireFailed = "retire_failed";       // day, reason, balance
+    public const string RaidFirstClear = "raid_first_clear";  // scene, day, saleBonusAdded, saleBonusTotal — 구역 첫 클리어 확정(귀환 후)
+    public const string RaidSkipped = "raid_skipped";         // day, nextDay, moduleCreditsGranted, moduleCreditsAfter — 습격 없이 다음 날로
     public const string EndingChoice = "ending_choice";       // endingType(retire/end_chest), choice(lobby/continue), panelSeconds, day, firstEnding
     public const string SystemCategory = "System";           // 씬 시작·새 게임 시작·저장 게임 시작(...)에 installId, saveId
 
