@@ -142,7 +142,7 @@ public static class WeaponsPage
       <div><h3>습격 발사 위치 히트맵</h3>
         <p class="sub" style="margin:0">NightRaid / weapon_fired의 position X·Z 밀도 · 동일 축척 · 버전 내 비율, 제곱근 스케일 · 위쪽이 +Z · 모든 총 합계</p></div>
       <div class="row"><span class="muted">스테이지</span><select id="stage"></select>
-        <span class="muted">적음</span><span class="ramp"></span><span class="muted">많음</span></div>
+        <span class="muted">적음</span><span class="ramp pitch"></span><span class="muted">많음</span></div>
     </div>
     <div id="heat" class="heatgrid" style="margin-top:10px"></div>
   </section>
@@ -538,29 +538,13 @@ function renderHeat(vs) {
     h._total = h.cells.reduce((a, b) => a + b, 0);
     h.cells.forEach((c) => { if (h._total) maxShare = Math.max(maxShare, c / h._total); });
   });
+  pitchHeats(maps.map((m) => m.h), maxShare);
   box.innerHTML = "";
   for (const { v, h } of maps) {
     const wrap = document.createElement("div");
     wrap.innerHTML = '<div class="cap"><span class="sw" style="background:' + color(v) + '"></span>' + esc(v.version) +
       '<span class="muted" style="margin-left:6px">' + (h ? num(h._total, 0) + "발" : "기록 없음") + "</span></div>";
-    if (h) {
-      const cv = document.createElement("canvas");
-      cv.width = h.grid; cv.height = h.grid;
-      const ctx = cv.getContext("2d");
-      const img = ctx.createImageData(h.grid, h.grid);
-      for (let r = 0; r < h.grid; r++) {
-        for (let c = 0; c < h.grid; c++) {
-          const val = h.cells[r * h.grid + c];
-          if (!val) continue;
-          const col = ramp(Math.sqrt(val / h._total / maxShare));
-          const i = ((h.grid - 1 - r) * h.grid + c) * 4;
-          img.data[i] = col[0]; img.data[i + 1] = col[1]; img.data[i + 2] = col[2]; img.data[i + 3] = 255;
-        }
-      }
-      ctx.putImageData(img, 0, 0);
-      cv.title = "X " + num(h.minX) + " ~ " + num(h.maxX) + ", Z " + num(h.minZ) + " ~ " + num(h.maxZ);
-      wrap.appendChild(cv);
-    }
+    if (h) wrap.appendChild(h._canvas);
     box.appendChild(wrap);
   }
 }

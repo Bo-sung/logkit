@@ -124,7 +124,7 @@ public static class AnalyticsPage
           일차 = 습격 시작의 day(없으면 직전 상점 일차, 0일차 = 튜토리얼 훈련)</p></div>
       <div class="row"><span class="muted">스테이지</span><select id="stage"></select>
         <span class="muted">일차</span><select id="heatday"></select>
-        <span class="muted">적음</span><span class="ramp"></span><span class="muted">많음</span></div>
+        <span class="muted">적음</span><span class="ramp pitch"></span><span class="muted">많음</span></div>
     </div>
     <div id="heat" class="heatgrid" style="margin-top:10px"></div>
   </section>
@@ -311,30 +311,14 @@ function renderHeat(vs) {
     h._total = h.cells.reduce((a, b) => a + b, 0);
     h.cells.forEach((c) => { if (h._total) maxShare = Math.max(maxShare, c / h._total); });
   });
+  pitchHeats(maps.map((m) => m.h), maxShare);
   box.innerHTML = "";
   for (const { v, d, h } of maps) {
     const wrap = document.createElement("div");
     wrap.innerHTML = '<div class="cap"><span class="sw" style="background:' + color(v) + '"></span>' + esc(v.version) +
       (d != null ? '<span style="margin-left:6px">' + d + "일차</span>" : "") +
       '<span class="muted" style="margin-left:6px">' + (h ? num(h._total, 0) + " 표본" : "표본 없음") + "</span></div>";
-    if (h) {
-      const cv = document.createElement("canvas");
-      cv.width = h.grid; cv.height = h.grid;
-      const ctx = cv.getContext("2d");
-      const img = ctx.createImageData(h.grid, h.grid);
-      for (let r = 0; r < h.grid; r++) {
-        for (let c = 0; c < h.grid; c++) {
-          const val = h.cells[r * h.grid + c];
-          if (!val) continue;
-          const rgb = ramp(Math.sqrt(val / h._total / maxShare));
-          const i = ((h.grid - 1 - r) * h.grid + c) * 4;
-          img.data[i] = rgb[0]; img.data[i + 1] = rgb[1]; img.data[i + 2] = rgb[2]; img.data[i + 3] = 255;
-        }
-      }
-      ctx.putImageData(img, 0, 0);
-      cv.title = "X " + num(h.minX) + " ~ " + num(h.maxX) + ", Z " + num(h.minZ) + " ~ " + num(h.maxZ);
-      wrap.appendChild(cv);
-    }
+    if (h) wrap.appendChild(h._canvas);
     box.appendChild(wrap);
   }
 }

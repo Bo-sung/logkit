@@ -84,9 +84,10 @@ tr.group td { background: #1c2128; color: var(--muted); font-size: 11.5px; lette
   border-radius: 6px; padding: 6px 9px; font-size: 12px; white-space: pre; display: none; box-shadow: 0 4px 12px rgba(0,0,0,.4); }
 .heatgrid { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 12px; }
 .heatgrid canvas { width: 100%; aspect-ratio: 1; display: block; border: 1px solid var(--border); border-radius: 6px;
-  image-rendering: pixelated; background: #0d1117; }
+  background: #12261b; }
 .heatgrid .cap { font-size: 12px; margin-bottom: 4px; display: flex; align-items: center; }
 .ramp { height: 8px; width: 160px; border-radius: 4px; background: linear-gradient(90deg, #104281, #3987e5, #cde2fb); }
+.ramp.pitch { background: linear-gradient(90deg, #12261b, #1a9850, #91cf60, #fee08b, #fc8d59, #d73027); }
 .missing { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 8px; }
 .missing div { border: 1px dashed var(--border); border-radius: 6px; padding: 8px 10px; color: var(--muted); font-size: 12px; }
 .missing b { color: var(--text); display: block; font-weight: 600; }
@@ -331,6 +332,73 @@ function ramp(t) {
   return RAMP[i].map((a, k) => Math.round(a + (RAMP[i + 1][k] - a) * f));
 }
 function rgb(t) { return "rgb(" + ramp(t).join(",") + ")"; }
+
+// 축구 히트맵 색: 낮은 밀도는 잔디 바탕이 비치고 초록 → 노랑 → 주황 → 빨강으로 진해진다
+const PITCH_STOPS = [[0, [26, 152, 80, 0]], [0.12, [26, 152, 80, 120]], [0.35, [145, 207, 96, 190]],
+  [0.6, [254, 224, 139, 220]], [0.8, [252, 141, 89, 235]], [1, [215, 48, 39, 245]]];
+const PITCH_LUT = (() => {
+  const lut = new Uint8ClampedArray(256 * 4);
+  for (let i = 0; i < 256; i++) {
+    const t = i / 255, k = PITCH_STOPS.findIndex(([at]) => at >= t);
+    const [a0, c0] = PITCH_STOPS[Math.max(0, k - 1)], [a1, c1] = PITCH_STOPS[Math.max(0, k)];
+    const f = a1 === a0 ? 0 : (t - a0) / (a1 - a0);
+    for (let j = 0; j < 4; j++) lut[i * 4 + j] = c0[j] + (c1[j] - c0[j]) * f;
+  }
+  return lut;
+})();
+/**
+ * 격자 히트맵들(h.grid × h.grid 칸 수, 아래 행부터)을 축구 히트맵처럼 부드럽게 그려 각 h._canvas에 둔다.
+ * 칸 밀도(전체 대비 비율 / maxShare의 제곱근)를 크게 늘려 흐리게 번진 뒤, 함께 그린 모든 히트맵 중 가장 진한 곳을 1로 맞춰
+ * 색표를 입힌다(버전·일차끼리 같은 축척으로 비교).
+ */
+function pitchHeats(list, maxShare) {
+  const size = 480, drawn = [];
+  let peak = 0;
+  list.forEach((h) => {
+    if (!h) return;
+    const n = h.grid, total = h._total;
+    const src = document.createElement("canvas");
+    src.width = n; src.height = n;
+    const sctx = src.getContext("2d"), img = sctx.createImageData(n, n);
+    for (let r = 0; r < n; r++) {
+      for (let c = 0; c < n; c++) {
+        const val = h.cells[r * n + c];
+        if (!val) continue;
+        const i = ((n - 1 - r) * n + c) * 4;
+        img.data[i] = img.data[i + 1] = img.data[i + 2] = 255;
+        img.data[i + 3] = Math.round(255 * Math.min(1, Math.sqrt(val / total / maxShare)));
+      }
+    }
+    sctx.putImageData(img, 0, 0);
+    const cv = document.createElement("canvas");
+    cv.width = size; cv.height = size;
+    const ctx = cv.getContext("2d", { willReadFrequently: true });
+    ctx.imageSmoothingEnabled = true;
+    ctx.filter = "blur(" + Math.max(2, size / n * 0.9) + "px)";
+    ctx.drawImage(src, 0, 0, size, size);
+    ctx.filter = "none";
+    const out = ctx.getImageData(0, 0, size, size);
+    for (let i = 3; i < out.data.length; i += 4) peak = Math.max(peak, out.data[i]);
+    drawn.push({ h, cv, ctx, out });
+  });
+  drawn.forEach(({ h, cv, ctx, out }) => {
+    const d = out.data;
+    for (let i = 0; i < d.length; i += 4) {
+      const k = peak ? Math.min(255, Math.round(d[i + 3] / peak * 255)) * 4 : 0;
+      d[i] = PITCH_LUT[k]; d[i + 1] = PITCH_LUT[k + 1]; d[i + 2] = PITCH_LUT[k + 2]; d[i + 3] = PITCH_LUT[k + 3];
+    }
+    ctx.putImageData(out, 0, 0);
+    // 위치를 읽기 쉽게 4×4 보조선
+    ctx.strokeStyle = "rgba(255,255,255,0.08)";
+    ctx.lineWidth = 1;
+    for (let k = 1; k < 4; k++) {
+      const p = Math.round(size * k / 4) + 0.5;
+      ctx.beginPath(); ctx.moveTo(p, 0); ctx.lineTo(p, size); ctx.moveTo(0, p); ctx.lineTo(size, p); ctx.stroke();
+    }
+    cv.title = "X " + num(h.minX) + " ~ " + num(h.maxX) + ", Z " + num(h.minZ) + " ~ " + num(h.maxZ);
+    h._canvas = cv;
+  });
+}
 
 function avg(list) { return list.length ? list.reduce((a, b) => a + b, 0) / list.length : null; }
 
