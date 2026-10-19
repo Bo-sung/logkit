@@ -1,4 +1,4 @@
-# ARMORY 대시보드 인계
+# GGGG 대시보드 인계
 
 ## 실행
 `dist/index.html`을 브라우저에서 열면 됩니다. 빌드·설치·서버·API 키가 필요 없는 HTML/CSS/JavaScript 프로젝트입니다.
@@ -43,7 +43,7 @@ DOM 대역을 사용하는 로직 검사에 더해, 헤드리스 Edge로 6개 �
 
 ## 실제 데이터 (저장소 미포함)
 logkit은 공개 저장소이므로 실제 플레이 로그(`data/*.csv`, `dist/data.js`)는 `.gitignore`로 제외했다.
-화면 실행과 `node tests/verify.cjs`는 두 파일이 있어야 동작하므로, 인계 ZIP(ARMORY_Codex_Handoff.zip)에서 같은 경로에 복사해 둔다.
+화면 실행과 `node tests/verify.cjs`는 두 파일이 있어야 동작하므로, 인계 ZIP(GGGG_Codex_Handoff.zip)에서 같은 경로에 복사해 둔다.
 
 ## 기존 Sites 참조
 기존 비공개 배포 사이트의 URL·project_id·배포 커밋은 인계 ZIP의 원본 README에만 둔다(공개 저장소에 올리지 않음).
