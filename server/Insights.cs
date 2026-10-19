@@ -32,6 +32,7 @@ internal sealed class InsightTracker
     private InsightTutorial? _tutorial;
     private (int Day, double Balance)? _closeBalance;
     private readonly Dictionary<string, double> _saveSeconds = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, DateTime> _saveActivity = new(StringComparer.Ordinal);
 
     public InsightTracker(InsightDigest digest)
     {
@@ -48,6 +49,12 @@ internal sealed class InsightTracker
         }
 
         _lastAt = at;
+        if (category == GameEvents.ShopCategory || (category == GameEvents.RaidCategory && name == GameEvents.RaidStart))
+        {
+            // 계속 플레이한 흔적: 상점 이벤트나 습격 시작. 사망 뒤 이탈 판정에 쓴다.
+            _saveActivity[_saveId] = at;
+        }
+
         if (_pauseStart is DateTime paused)
         {
             _phasePaused += Math.Max(0, (at - paused).TotalSeconds);
@@ -456,6 +463,7 @@ internal sealed class InsightTracker
             return;
         }
 
+        _raid.EndAt = at;
         _raid.Survived = Bool(data, "survived");
         _raid.Exit = Text(data, "exitReason");
         _raid.Duration = Number(data, "duration");
@@ -529,6 +537,7 @@ internal sealed class InsightTracker
         }
 
         _digest.SaveSeconds = new Dictionary<string, double>(_saveSeconds, StringComparer.Ordinal);
+        _digest.SaveActivity = new Dictionary<string, DateTime>(_saveActivity, StringComparer.Ordinal);
         _digest.Orders.AddRange(_orders.Values.Where(o => o.Day != null));
         _digest.Days.AddRange(_days.OrderBy(p => p.Key).Select(p => p.Value));
     }
@@ -661,6 +670,9 @@ internal sealed class InsightDigest
 
     /// <summary>세이브별 이 세션의 플레이 시간(일시정지 제외, 초).</summary>
     public Dictionary<string, double> SaveSeconds = new(StringComparer.Ordinal);
+
+    /// <summary>세이브별 이 세션의 마지막 활동 시각(상점 이벤트·습격 시작).</summary>
+    public Dictionary<string, DateTime> SaveActivity = new(StringComparer.Ordinal);
 }
 
 /// <summary>
@@ -670,6 +682,9 @@ internal sealed class InsightDigest
 /// </summary>
 internal static class InsightPlayers
 {
+    /// <summary>습격 종료 뒤 이 시간(초) 안의 활동은 이어서 플레이한 것으로 보지 않는다(귀환 처리 중 자동으로 남는 기록).</summary>
+    private const double QUIT_GRACE_SECONDS = 20;
+
     public static InsightVersion Combine(string version, List<(SessionRow Row, InsightDigest Digest)> sessions)
     {
         InsightVersion v = new() { Version = version, Sessions = sessions.Count };
@@ -679,6 +694,7 @@ internal static class InsightPlayers
         Dictionary<int, InsightPhase> lastPhase = new();
         Dictionary<int, InsightTutorial> openTutorial = new();
         Dictionary<int, double> played = new();
+        Dictionary<int, DateTime> lastActive = new();
 
         for (int s = 0; s < sessions.Count; s++)
         {
@@ -752,6 +768,15 @@ internal static class InsightPlayers
                 }
             }
 
+            foreach ((string saveId, DateTime activeAt) in digest.SaveActivity)
+            {
+                if (players.TryGetValue(saveId.Length > 0 ? "save:" + saveId : "session:" + session, out int p)
+                    && (!lastActive.TryGetValue(p, out DateTime known) || activeAt > known))
+                {
+                    lastActive[p] = activeAt;
+                }
+            }
+
             foreach (InsightPhase phase in digest.Phases)
             {
                 int p = Player(phase.SaveId);
@@ -813,6 +838,15 @@ internal static class InsightPlayers
                 List<InsightRaid> later = list.Skip(i + 1).ToList();
                 list[i].Retried = later.Count > 0;
                 list[i].RetriedSameStage = later.Any(r => r.Stage == stage);
+            }
+        }
+
+        // 이탈 = 습격이 끝난 뒤 같은 플레이어의 상점 이벤트·습격 시작이 없음(귀환 직후 자동 기록을 감안해 QUIT_GRACE_SECONDS 여유)
+        foreach (InsightRaid raid in v.Raids)
+        {
+            if (raid.EndAt is DateTime endAt)
+            {
+                raid.Quit = !lastActive.TryGetValue(raid.S, out DateTime active) || active <= endAt.AddSeconds(QUIT_GRACE_SECONDS);
             }
         }
 
@@ -1237,6 +1271,12 @@ public sealed class InsightRaid
     public double? ResponseMean { get; set; }
     public int ResponseCount { get; set; }
     public bool? Retried { get; set; }
+
+    /// <summary>이 습격이 끝난 뒤 같은 플레이어가 더 플레이하지 않았으면(상점 이벤트·습격 시작이 없음) true. 종료 기록이 없으면 null.</summary>
+    public bool? Quit { get; set; }
+
+    [System.Text.Json.Serialization.JsonIgnore]
+    internal DateTime? EndAt { get; set; }
     public bool? RetriedSameStage { get; set; }
 
     /// <summary>습격 시작에 기록된 총의 관통·폭발 수치(총구 중 최댓값, 방사 절반 반영). 이후 빌드부터.</summary>

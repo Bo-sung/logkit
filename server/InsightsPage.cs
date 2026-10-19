@@ -30,6 +30,8 @@ public static class InsightsPage
 .basever { display: inline-block; margin-left: 8px; padding: 0 7px; border: 1px solid var(--grid); border-radius: 10px;
   font-size: 11px; font-weight: 400; color: var(--muted); vertical-align: middle; }
 .basever:empty { display: none; }
+.trio { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 340px), 1fr)); gap: 18px; }
+.trio .subhead:first-child { margin-top: 4px; }
 .subhead { margin: 16px 0 4px; font-size: 12.5px; font-weight: 600; color: var(--text); }
 </style>
 </head>
@@ -206,6 +208,20 @@ public static class InsightsPage
       개수는 구간으로 묶음(관통 8+·폭발 11+는 종결 총기 기본 기준)</p>
     <div class="row" style="margin:6px 0"><span class="muted">성공률 0%</span><span class="ramp rate"></span><span class="muted">100%</span></div>
     <div id="c-penexp" class="cells"></div>
+  </section>
+
+  <section class="card wide">
+    <div class="q">습격에서 죽으면 그만두는가?</div>
+    <h3>습격 사망 후 이탈<span class="unitsw" data-unit="quit"></span></h3>
+    <p class="sub">이탈 = 습격이 끝난 뒤 같은 플레이어(세이브)의 상점 이벤트·습격 시작이 더 없음(귀환 직후 20초 안의 기록은 무시) ·
+      사망 = 결과 로그의 survived = false · 비교 기준으로 탈출 성공 뒤 이탈도 함께 봅니다 · 연습 습격·엔딩 종료는 뺌 ·
+      같은 버전 안의 기록만 보므로 다음 버전에서 이어 한 플레이어도 이탈로 셉니다</p>
+    <div class="trio">
+      <div><div class="subhead">사망 vs 탈출 뒤 이탈률</div><div id="c-quit-sum" class="chart"></div>
+        <div class="subhead">사망 뒤 무엇을 했나</div><div id="c-quit-next" class="chart"></div></div>
+      <div><div class="subhead">일차별 사망 후 이탈률</div><div id="c-quit-day" class="chart"></div></div>
+      <div><div class="subhead">스테이지별 사망 후 이탈률</div><div id="c-quit-stage" class="chart"></div></div>
+    </div>
   </section>
 
   <div class="section">일반 통계</div>
@@ -493,6 +509,7 @@ public static class InsightsPage
            같은 세션에서 코드로 본 구성으로 풀어 씀. 둘 다 없으면 총 미확인
 성공       습격 종료 이벤트의 survived
 재도전     실패(survived = false)한 습격 뒤 같은 플레이어의 습격이 더 있음. 그 뒤 기록이 없으면 재도전 안 함으로 셈
+이탈       습격 종료 뒤 같은 플레이어의 상점 이벤트·습격 시작이 없음(종료 후 20초 안의 기록은 귀환 처리로 보고 무시). 같은 버전 안에서만 봄
 대응 시간  같은 습격의 적 발견 → 적 처치(enemyId, time). 발견 없이 처치된 적은 뺌
 은퇴       Game / retire_completed(결제 직후, 세이브의 첫 은퇴만 — 같은 세이브에 여러 번이면 자동저장을 불러와 재시도), retire_failed(reason)
 엔드 상자  NightRaid / end_chest_scanned·end_chest_hit·end_chest_opened(습격당 각 1회). 엔딩 선택 = Game / ending_choice
@@ -1505,6 +1522,47 @@ function scatter(el, vs, pointsOf, guide, xFmt, yFmt, tipOf) {
   el.innerHTML = legend(series.map((x) => x.v)) + '<svg viewBox="0 0 ' + W + " " + H + '">' + s + "</svg>";
 }
 
+// ─── 습격 사망 후 이탈 ───
+function renderQuit(vs) {
+  const ids = ["c-quit-sum", "c-quit-next", "c-quit-day", "c-quit-stage"];
+  const ended = (v) => v.raids.filter((r) => r.quit != null && r.survived != null && !isTraining(r) && r.exit !== "ending_quit");
+  const deaths = (v) => ended(v).filter((r) => r.survived === false);
+  const qvs = vs.filter((v) => deaths(v).length);
+  if (!qvs.length) { ids.forEach((id) => { $(id).innerHTML = emptyBox("사망한 습격 기록이 없습니다."); }); return; }
+  const count = isCount("quit");
+
+  // 사망 vs 탈출 뒤 이탈률
+  const SUM = [["사망 후 이탈", (v) => deaths(v)], ["탈출 성공 후 이탈", (v) => ended(v).filter((r) => r.survived === true)]];
+  hbars($("c-quit-sum"), qvs, SUM.map(([k]) => k), (v, key) => {
+    const list = SUM.find(([k]) => k === key)[1](v);
+    return list.length ? shareBar("quit", list.filter((r) => r.quit).length, list.length, "회") : null;
+  }, count ? 0 : 1, false, 130);
+
+  // 사망 뒤 행동
+  const NEXT = [["이탈", (r) => r.quit], ["같은 스테이지 재도전", (r) => !r.quit && r.retriedSameStage],
+    ["다른 스테이지 습격", (r) => !r.quit && r.retried && !r.retriedSameStage], ["습격 없이 계속 플레이", (r) => !r.quit && !r.retried]];
+  hbars($("c-quit-next"), qvs, NEXT.map(([k]) => k), (v, key) => {
+    const list = deaths(v), test = NEXT.find(([k]) => k === key)[1];
+    return shareBar("quit", list.filter(test).length, list.length, "회");
+  }, count ? 0 : 1, false, 130);
+
+  // 일차별
+  const days = daysOf(qvs, deaths);
+  dayLines($("c-quit-day"), qvs, days, (v) => days.map((d) => {
+    const list = deaths(v).filter((r) => r.day === d), q = list.filter((r) => r.quit).length;
+    const ok = ended(v).filter((r) => r.day === d && r.survived === true), okq = ok.filter((r) => r.quit).length;
+    return { x: d, y: list.length ? (count ? q : q / list.length) : null, q, n: list.length, okq, okn: ok.length };
+  }), (v, p) => v.version + " · " + dayLabel(p.x) + "\n사망 후 이탈 " + pct(p.q / p.n) + " (" + p.q + " / " + p.n + "회)\n탈출 후 이탈 " +
+    pct(ratio(p.okq, p.okn)) + " (" + p.okq + " / " + p.okn + "회)", count);
+
+  // 스테이지별
+  const stages = stageOrder(qvs.flatMap((v) => deaths(v).map((r) => r.stage)));
+  hbars($("c-quit-stage"), qvs, stages.map(stageName), (v, name) => {
+    const list = deaths(v).filter((r) => stageName(r.stage) === name);
+    return list.length ? shareBar("quit", list.filter((r) => r.quit).length, list.length, "회") : null;
+  }, count ? 0 : 1, false, 120);
+}
+
 // ─── 일반 통계 ───
 function renderGeneral(vs) {
   const days = daysOf(vs, (v) => v.days);
@@ -1596,6 +1654,7 @@ function render() {
   renderTutorial(vs);
   renderNpc(vs);
   renderRetry(vs);
+  renderQuit(vs);
   renderEndgame(vs);
   renderResponse(vs);
   renderPenExp();
