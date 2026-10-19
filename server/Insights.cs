@@ -451,6 +451,8 @@ internal sealed class InsightTracker
 
         _raid.Survived = Bool(data, "survived");
         _raid.Exit = Text(data, "exitReason");
+        _raid.Duration = Number(data, "duration");
+        _raid.Kills = Number(data, "enemyKills");
         _raid.Dollar = Number(data, "dollarReward");
         _raid.Applied = Bool(data, "rewardsApplied");
         _raid.Material = Number(data, "materialCrateCredits");
@@ -1226,6 +1228,10 @@ public sealed class InsightRaid
     /// <summary>습격 시작에 기록된 총의 관통·폭발 수치(총구 중 최댓값, 방사 절반 반영). 이후 빌드부터.</summary>
     public double? Penetration { get; set; }
     public double? Explosion { get; set; }
+
+    /// <summary>습격 결과 로그의 duration(습격 시작 후 게임 초)과 enemyKills.</summary>
+    public double? Duration { get; set; }
+    public double? Kills { get; set; }
 
     /// <summary>습격 시작의 입장 비용(entryCost)과 연습 습격 여부(training). 이후 빌드부터.</summary>
     public double? EntryCost { get; set; }

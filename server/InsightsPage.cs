@@ -249,6 +249,29 @@ public static class InsightsPage
 
   <div class="section">습격 경제</div>
 
+  <section class="card">
+    <h3>일차별 스테이지 선택<span class="basever"></span><span class="unitsw" data-unit="daystage"></span></h3>
+    <p class="sub">습격 1회 = 1 · 습격 시작의 day 기준 · 그 일차 습격 중 각 스테이지 비율 · 연습 습격(training) 제외</p>
+    <div id="c-daystage" class="chart"></div>
+  </section>
+
+  <section class="card">
+    <div class="row" style="justify-content:space-between">
+      <h3>일차 × 스테이지 습격 통계<span class="basever"></span></h3>
+      <select id="dsmetric">
+        <option value="count">습격 수</option>
+        <option value="success">탈출 성공률</option>
+        <option value="duration">평균 습격 시간</option>
+        <option value="net">평균 순수익</option>
+        <option value="kills">평균 적 처치</option>
+      </select>
+    </div>
+    <p class="sub">칸 = 그 일차에 그 스테이지로 나간 습격 · 칸 색 = 고른 값(진할수록 큼) · 툴팁에 모든 값 · 연습 습격 제외 ·
+      습격 시간·적 처치는 결과 로그의 duration·enemyKills, 순수익은 dollarReward를 남기는 빌드부터</p>
+    <div class="row" style="margin:6px 0"><span class="muted">작음</span><span class="ramp"></span><span class="muted">큼</span></div>
+    <div id="c-daystage-grid" class="cells"></div>
+  </section>
+
   <section class="card wide">
     <h3>습격 경제 요약</h3>
     <p class="sub">연습 습격 제외 · 입장 비용·상자 수·달러 보상을 남기는 빌드부터 · 순수익 = dollarReward − entryCost(사망하면 −입장 비용) ·
@@ -452,6 +475,7 @@ public static class InsightsPage
            끝 기록 없이 끝난 진행은 마지막으로 시작한 단계에서 멈춘 것으로 봄
 수익       상점 판매 = Shop / weapon_sold price 합, 습격 보상 = 그날 밤 습격 결과의 dollarReward 합(연습 제외),
            습격 순수익 = dollarReward − 습격 시작의 entryCost, 합산 = 판매 + 습격 보상 (드롭다운으로 선택)
+일차별 스테이지  습격 시작의 day·scene, 결과 로그의 survived·exitReason·duration·enemyKills·dollarReward(기준 버전, 연습 제외)
 습격 경제  습격 시작의 entryCost·training·spawnedModuleCrates·spawnedMaterialCrates·materialPerCrate와 결과 로그의
            dollarReward·rewardsApplied·moduleCrateRewards·materialCrateCredits·materialPickups. 연습 습격(training)은 모두 뺌.
            모듈 회수율 = 주운 해금 모듈 수 / 만든 모듈 상자 수, 재료 회수율 = 주운 재료 재화 / (재료 상자 수 × 상자당 재화).
@@ -1007,6 +1031,87 @@ function renderPenExp() {
   }, "관통 모듈 수", "");
 }
 
+// ─── 일차별 스테이지 ───
+/** 스테이지 순서는 게임 스테이지 표(입장 비용 오름차순), 표에 없는 씬은 뒤에 이름순. 색은 이 순서로 고정한다. */
+function stageOrder(scenes) {
+  const table = state.data.stages.map((s) => s.scene);
+  return [...new Set(scenes)].sort((a, b) => {
+    const ia = table.indexOf(a), ib = table.indexOf(b);
+    return (ia < 0 ? 999 : ia) - (ib < 0 ? 999 : ib) || a.localeCompare(b);
+  });
+}
+const STAGE_COLORS = ["#8b949e", "#3987e5", "#c98500", "#199e70", "#d95926", "#9085e9", "#d55181", "#008300"];
+const stageColor = (scene) => {
+  const i = state.data.stages.findIndex((s) => s.scene === scene);
+  return STAGE_COLORS[(i < 0 ? state.data.stages.length + 1 : i) % STAGE_COLORS.length];
+};
+
+function renderDayStage() {
+  const v = heatVersion();
+  const el = $("c-daystage"), grid = $("c-daystage-grid");
+  if (!v) { el.innerHTML = grid.innerHTML = emptyBox("버전을 선택하세요."); return; }
+  const raids = v.raids.filter((r) => r.day != null && !r.training && r.stage && r.stage !== "(미기록)");
+  if (!raids.length) { el.innerHTML = grid.innerHTML = emptyBox(v.version + " — 일차를 아는 습격이 없습니다."); return; }
+  const days = [...new Set(raids.map((r) => r.day))].sort((a, b) => a - b);
+  const stages = stageOrder(raids.map((r) => r.stage));
+  const byDay = new Map(days.map((d) => [d, raids.filter((r) => r.day === d)]));
+
+  // 일차별 스테이지 비율(누적 막대)
+  const count = isCount("daystage");
+  const maxN = Math.max(...days.map((d) => byDay.get(d).length));
+  const scaleMax = count ? countMax(maxN) : 1;
+  const W = widthOf(el), H = 260, left = 48, top = 10, bottom = 28, plotW = W - left - 8, plotH = H - top - bottom;
+  let s = yAxis(W, top, plotH, left, scaleMax, count ? (x) => num(x, 0) : (x) => num(x * 100, 0) + "%");
+  const groupW = plotW / days.length, bw = Math.max(8, Math.min(44, groupW * 0.6));
+  days.forEach((d, c) => {
+    const list = byDay.get(d), x = left + groupW * c + (groupW - bw) / 2;
+    let y = top + plotH;
+    stages.forEach((st, k) => {
+      const n = list.filter((r) => r.stage === st).length;
+      if (!n) return;
+      const h = plotH * (count ? n / scaleMax : n / list.length);
+      const ok = list.filter((r) => r.stage === st && r.survived === true).length;
+      // 위로 쌓고, 조각 사이 2px 틈
+      s += '<rect x="' + x + '" y="' + (y - h) + '" width="' + bw + '" height="' + Math.max(1, h - 2) + '" rx="2" fill="' + stageColor(st) + '" data-tip="' +
+        esc(v.version + " · " + dayLabel(d) + " · " + stageName(st) + "\n" + pct(n / list.length) + " (" + n + " / " + list.length + "회)\n탈출 성공 " + pct(ratio(ok, n))) + '"/>';
+      y -= h;
+    });
+    s += '<text x="' + (left + groupW * c + groupW / 2) + '" y="' + (H - 8) + '" text-anchor="middle">' + esc(dayLabel(d)) + "</text>";
+  });
+  el.innerHTML = '<div class="legend">' + stages.map((st) => '<span><i style="background:' + stageColor(st) + '"></i>' + esc(stageName(st)) + "</span>").join("") +
+    '</div><svg viewBox="0 0 ' + W + " " + H + '">' + s + "</svg>";
+
+  // 일차 × 스테이지 표
+  const metric = $("dsmetric").value;
+  const statsOf = (list) => {
+    const ended = list.filter((r) => r.survived != null), withDollar = list.filter((r) => r.dollar != null);
+    return {
+      count: list.length,
+      success: ended.length ? ended.filter((r) => r.survived === true && r.exit !== "ending_quit").length / ended.length : null,
+      duration: avg(list.filter((r) => r.duration != null).map((r) => r.duration)),
+      net: withDollar.length ? avg(withDollar.map((r) => r.dollar - (r.entryCost || 0))) : null,
+      kills: avg(list.filter((r) => r.kills != null).map((r) => r.kills)),
+      ended: ended.length,
+    };
+  };
+  const fmt = { count: (x) => num(x, 0), success: (x) => pct(x, 0), duration: (x) => dur(x), net: (x) => signedMoney(x), kills: (x) => num(x, 1) };
+  const cells = stages.map((st) => days.map((d) => {
+    const list = byDay.get(d).filter((r) => r.stage === st);
+    return list.length ? statsOf(list) : null;
+  }));
+  const values = cells.flat().filter((c) => c && c[metric] != null).map((c) => c[metric]);
+  const lo = Math.min(...values), hi = Math.max(...values);
+  cellmap(grid, stages.map(stageName), days.map(dayLabel), (i, j) => {
+    const c = cells[i][j];
+    if (!c) return null;
+    const val = c[metric];
+    const short = metric === "duration" ? (val == null ? "–" : Math.round(val) + "s") : metric === "net" && val != null ? (val < 0 ? "−" : "+") + num(Math.abs(val), 0) : val == null ? "–" : fmt[metric](val);
+    return { t: val == null ? 0 : hi > lo ? (val - lo) / (hi - lo) : 1, text: short,
+      tip: v.version + " · " + dayLabel(days[j]) + " · " + stages[i] + "\n습격 " + c.count + "회 · 탈출 성공 " + pct(c.success) + " (결과 " + c.ended + "회)\n" +
+        "평균 습격 시간 " + dur(c.duration) + "\n평균 순수익 " + (c.net == null ? "–" : signedMoney(c.net)) + "\n평균 적 처치 " + num(c.kills, 1) };
+  }, "습격 일차", "");
+}
+
 // ─── 습격 경제 ───
 function renderRaidEconomy(vs) {
   const raidsOf = (v) => v.raids.filter((r) => !r.training && (r.entryCost != null || r.dollar != null || r.spawnedModule != null));
@@ -1464,6 +1569,7 @@ function render() {
   renderPenExp();
   renderGeneral(vs);
   renderModules();
+  renderDayStage();
   renderRaidEconomy(vs);
   renderEnding(vs);
   renderSlot(vs);
@@ -1481,12 +1587,12 @@ document.querySelectorAll("#rule input").forEach((inp) => {
 $("withended").checked = !!loadPrefs().withended;
 $("withended").onchange = () => { savePrefs({ withended: $("withended").checked }); renderPhase(); };
 $("tutseq").onchange = () => { savePrefs({ tutseq: $("tutseq").value }); renderTutorial(selectedVersions()); };
-for (const id of ["modmetric", "retrymode", "revmode", "nightmode", "vaultmetric", "balmode", "endsource", "endtype", "recmetric", "lossmetric"]) {
+for (const id of ["modmetric", "retrymode", "revmode", "nightmode", "vaultmetric", "balmode", "endsource", "endtype", "recmetric", "lossmetric", "dsmetric"]) {
   const saved = loadPrefs()[id];
   if (saved && [...$(id).options].some((o) => o.value === saved)) $(id).value = saved;
   $(id).onchange = () => { savePrefs({ [id]: $(id).value }); render(); };
 }
-$("hver").onchange = () => { savePrefs({ hver: $("hver").value }); markBaseVersion(); renderPhase(); renderHoldings(); renderPenExp(); renderModules(); };
+$("hver").onchange = () => { savePrefs({ hver: $("hver").value }); markBaseVersion(); renderPhase(); renderHoldings(); renderPenExp(); renderModules(); renderDayStage(); };
 initPage();
 </script>
 </body>
