@@ -104,6 +104,9 @@ public sealed class SessionSummary
         return computed.Value.Info;
     }
 
+    /// <summary>휴지통에서 복원한 세션의 요약 행을 그대로 다시 쓴다.</summary>
+    public void RestoreRow(SessionRow row) => UpsertRow(row);
+
     /// <summary>
     /// 세션 요약 행을 월별 요약 CSV의 sessionId 키로 교체 기록한다.
     /// row를 입력으로 사용하며, 행이 쓰인 월 키(yyyy-MM)를 반환한다.

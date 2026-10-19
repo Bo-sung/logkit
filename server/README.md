@@ -31,6 +31,7 @@ dotnet run        # http://0.0.0.0:5000 에서 대기
 | MaxBodyBytes | 5242880 | gzip 본문 상한(초과 시 413) |
 | KeepRawJsonl | true | 수신 원문을 `data/raw/`에 보존할지 여부 |
 | RawRetentionDays | 90 | raw 보존 일수. 기동 시 경과분을 삭제 |
+| TrashRetentionDays | 7 | 휴지통 보관 일수. 기동 직후와 매시간 확인해 삭제한 지 이만큼 지난 세션을 영구 삭제(0 이하면 자동 삭제 안 함) |
 | InboxProcessIntervalSeconds | 2 | 업로드가 오면 이만큼 더 기다렸다가 그사이 도착분까지 한 번에 처리 |
 | DerivedMetrics | (공격 명중률 1건) | 파생 지표 규칙. 분자·분모 지표 키의 몫을 계산한다. 키는 클라이언트 `GameLogger.Count`의 key와 일치 |
 
@@ -52,8 +53,12 @@ dotnet run        # http://0.0.0.0:5000 에서 대기
 | `GET /api/metrics?month=` | 필요 | 200 JSON | 월 전체 세션의 지표 합산 + 파생 지표(명중률 등) 계산 |
 | `GET /api/sessions/{id}/csv` | 필요 | 200 `text/csv` | 세션 CSV 내려받기 |
 | `GET /api/sessions/{id}/raw` | 필요 | 200 `application/gzip` | 수신 원문 gzip 내려받기 |
-| `DELETE /api/sessions/{id}` | 필요 | 200 JSON | 세션 CSV·raw·요약 행 일괄 삭제(없으면 404) |
-| `DELETE /api/months/{yyyy-MM}` | 필요 | 200 JSON | 월 전체 세션·요약 삭제(없으면 404) |
+| `DELETE /api/sessions/{id}` | 필요 | 200 JSON | 세션 파일을 휴지통으로 옮기고 요약 행 삭제(없으면 404) |
+| `DELETE /api/months/{yyyy-MM}` | 필요 | 200 JSON | 월 전체 세션을 휴지통으로 옮기고 월 요약 삭제(없으면 404) |
+| `GET /api/trash` | 필요 | 200 JSON | 휴지통 목록(삭제 시각·자동 삭제 예정 시각·삭제 전 요약 행) |
+| `POST /api/trash/{id}/restore` | 필요 | 200 JSON | 휴지통 세션 복원(없으면 404, 같은 세션 파일이 이미 있으면 409) |
+| `DELETE /api/trash/{id}` | 필요 | 200 JSON | 휴지통 세션 영구 삭제(없으면 404) |
+| `DELETE /api/trash` | 필요 | 200 JSON | 휴지통 비우기 |
 | `GET /api/summary/{yyyy-MM}.csv` | 필요 | 200 `text/csv` | 월별 요약 CSV 다운로드(없거나 형식이 틀리면 404) |
 | `GET /dashboard` | 불필요 | 200 `text/html` | 브라우저 열람 대시보드. `/`는 `/dashboard`로 리디렉션 |
 | `GET /analytics` | 불필요 | 200 `text/html` | 버전별 누적 통계 페이지 |
@@ -91,7 +96,8 @@ curl -H "X-Api-Key: dev-log-key" http://localhost:5000/api/summary/2026-10.csv
 - **세션 목록**: 최신순/오류순/로그 많은순 정렬, ID·플랫폼·버전 검색, 문제 세션만 보기. 행을 클릭하면 상세가 열린다.
 - **세션 상세**: 레벨(Info~Exception) 체크박스, 카테고리·씬·텍스트 필터, 500건 단위 페이지 이동. 항목 행을 클릭하면 메시지 전문·dataJson(정렬됨)·스택트레이스가 펼쳐진다. 하단에 플레이 지표 표와 파생 지표(명중률 등)가 나온다.
 - **월 지표**: 세션 목록 위에 그 달 전체 지표 합계와 파생 지표(공격 명중률 등)가 표시된다(`/api/metrics`).
-- **내려받기/삭제**: 세션 CSV·raw gzip 내려받기, 세션 삭제, 월 전체 삭제(월 키 입력 확인).
+- **내려받기/삭제**: 세션 CSV·raw gzip 내려받기, 세션 삭제, 월 전체 삭제(월 키 입력 확인). 삭제한 세션은 휴지통으로 가며
+  휴지통 버튼에서 복원·영구 삭제·비우기를 한다. 휴지통 항목은 7일(TrashRetentionDays) 뒤 자동으로 영구 삭제된다.
 
 ## 버전별 누적 통계 (/analytics)
 
@@ -182,7 +188,8 @@ category와 message로 식별하고 data_json 필드를 읽는다. 규칙은 `ar
 ├─ sessions/{sessionId}.meta.json     세션 헤더(시각·버전·플랫폼 등). 종료 시각은 최댓값, 정상 종료는 OR로 합침
 ├─ sessions/{sessionId}.metrics.csv   플레이 지표(key,count,sum). 지표가 있는 업로드에서만 갱신
 ├─ summary/{yyyy-MM}.csv              월별 집계. sessionId 키 upsert (시작시각·지속시간·레벨 카운트·에디터 여부 등)
-└─ raw/{sessionId}.p0000.jsonl.gz     파트별 수신 원문. KeepRawJsonl=false면 미저장, RawRetentionDays 경과 시 기동 중 삭제
+├─ raw/{sessionId}.p0000.jsonl.gz     파트별 수신 원문. KeepRawJsonl=false면 미저장, RawRetentionDays 경과 시 기동 중 삭제
+└─ trash/{sessionId}/                 삭제한 세션. sessions/·raw/ 아래 원래 파일과 trash.json(삭제 시각·요약 행). TrashRetentionDays 경과 시 영구 삭제
 ```
 
 - `/api/sessions/{id}/raw`는 파트 gzip을 다중 멤버 gzip으로 이어 붙여 돌려준다(`gzip -d`로 그대로 해제된다).

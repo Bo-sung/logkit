@@ -354,88 +354,120 @@ public sealed class CsvSessionStore
     }
 
     /// <summary>
-    /// 세션 CSV와 raw gzip 파일을 삭제한다.
-    /// sessionId를 입력으로 사용하며 각각 삭제했는지 담은 튜플을 반환한다.
+    /// 세션 파일 경로 목록. sessions 아래(통합·메타·지표·파트 CSV)와 raw 아래(단일·파트 gzip)를 (하위 폴더 이름, 경로)로 돌려준다.
     /// </summary>
-    public (bool SessionCsv, bool Raw) DeleteSessionFiles(string sessionId)
+    private List<(string Folder, string Path)> SessionFiles(string sessionId)
     {
-        bool csvDeleted = false;
-        bool rawDeleted = false;
+        List<(string Folder, string Path)> files = new();
+        foreach (string path in new[] { MetaPath(sessionId), MetricsCsvPath(sessionId), SessionCsvPath(sessionId) })
+        {
+            if (File.Exists(path))
+            {
+                files.Add(("sessions", path));
+            }
+        }
 
-        // 세션 단위 잠금으로 저장 중인 파트와의 경합을 막는다.
-        // 메타 경로가 곧 세션 잠금이므로, 메타 삭제는 잠금 없이 지운다(재진입 시 교착).
+        if (Directory.Exists(SessionsDirectory))
+        {
+            files.AddRange(Directory.GetFiles(SessionsDirectory, sessionId + ".p*.csv").Select(p => ("sessions", p)));
+        }
+
+        if (Directory.Exists(RawDirectory))
+        {
+            files.AddRange(Directory.GetFiles(RawDirectory, sessionId + ".p*.jsonl.gz").Select(p => ("raw", p)));
+        }
+
+        if (File.Exists(RawFilePath(sessionId)))
+        {
+            files.Add(("raw", RawFilePath(sessionId)));
+        }
+
+        return files;
+    }
+
+    /// <summary>세션 파일(sessions·raw)이 하나라도 있으면 true.</summary>
+    public bool HasSessionFiles(string sessionId) => SessionFiles(sessionId).Count > 0;
+
+    /// <summary>
+    /// 세션 파일을 targetRoot/sessions, targetRoot/raw 아래로 옮긴다(휴지통). 세션 잠금 안에서 옮기며 옮긴 파일 수를 반환한다.
+    /// </summary>
+    public int MoveSessionFiles(string sessionId, string targetRoot)
+    {
         SemaphoreSlim gate = FileLocks.Get(MetaPath(sessionId));
         gate.Wait();
         try
         {
-            csvDeleted |= DeleteFileWithoutLock(MetaPath(sessionId));
-            csvDeleted |= DeleteLocked(MetricsCsvPath(sessionId));
-            csvDeleted |= DeleteLocked(SessionCsvPath(sessionId));
-            if (Directory.Exists(SessionsDirectory))
+            int moved = 0;
+            foreach ((string folder, string path) in SessionFiles(sessionId))
             {
-                foreach (string partFile in Directory.GetFiles(SessionsDirectory, sessionId + ".p*.csv"))
+                string target = Path.Combine(targetRoot, folder, Path.GetFileName(path));
+                Directory.CreateDirectory(Path.GetDirectoryName(target)!);
+                if (path == MetaPath(sessionId))
                 {
-                    csvDeleted |= DeleteLocked(partFile);
+                    // 메타 경로가 곧 세션 잠금이라 잠금 없이 옮긴다(재진입 시 교착)
+                    File.Move(path, target, overwrite: true);
                 }
+                else
+                {
+                    MoveLocked(path, target);
+                }
+
+                moved++;
             }
 
-            if (Directory.Exists(RawDirectory))
-            {
-                foreach (string rawPartFile in Directory.GetFiles(RawDirectory, sessionId + ".p*.jsonl.gz"))
-                {
-                    rawDeleted |= DeleteLocked(rawPartFile);
-                }
-            }
-
-            rawDeleted |= DeleteLocked(RawFilePath(sessionId));
+            return moved;
         }
         finally
         {
             gate.Release();
         }
-
-        return (csvDeleted, rawDeleted);
     }
 
     /// <summary>
-    /// 파일 잠금 없이 파일을 삭제한다.
-    /// path를 입력으로 사용하며 삭제했으면 true를, 파일이 없으면 false를 반환한다. 이미 잠금을 보유한 경로에 쓴다.
+    /// sourceRoot/sessions, sourceRoot/raw 아래 세션 파일을 제자리로 돌린다(휴지통 복원).
+    /// 같은 세션 파일이 이미 있으면(삭제 뒤 다시 업로드됨) 아무것도 옮기지 않고 false를 반환한다.
     /// </summary>
-    private static bool DeleteFileWithoutLock(string path)
+    public bool RestoreSessionFiles(string sessionId, string sourceRoot)
     {
-        if (!File.Exists(path))
+        if (SessionFiles(sessionId).Count > 0)
         {
             return false;
         }
 
+        SemaphoreSlim gate = FileLocks.Get(MetaPath(sessionId));
+        gate.Wait();
         try
         {
-            File.Delete(path);
+            foreach ((string folder, string directory) in new[] { ("sessions", SessionsDirectory), ("raw", RawDirectory) })
+            {
+                string source = Path.Combine(sourceRoot, folder);
+                if (!Directory.Exists(source))
+                {
+                    continue;
+                }
+
+                Directory.CreateDirectory(directory);
+                foreach (string file in Directory.GetFiles(source))
+                {
+                    File.Move(file, Path.Combine(directory, Path.GetFileName(file)));
+                }
+            }
+
             return true;
         }
-        catch (IOException)
+        finally
         {
-            return false;
+            gate.Release();
         }
     }
 
-    /// <summary>
-    /// 파일을 파일 잠금과 함께 삭제한다.
-    /// path를 입력으로 사용하며 삭제했으면 true를, 파일이 없으면 false를 반환한다.
-    /// </summary>
-    private static bool DeleteLocked(string path)
+    private static void MoveLocked(string path, string target)
     {
-        if (!File.Exists(path))
-        {
-            return false;
-        }
-
         SemaphoreSlim gate = FileLocks.Get(path);
         gate.Wait();
         try
         {
-            File.Delete(path);
-            return true;
+            File.Move(path, target, overwrite: true);
         }
         finally
         {

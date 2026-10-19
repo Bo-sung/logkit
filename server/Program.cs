@@ -27,6 +27,9 @@ public sealed class ServerOptions
     /// <summary>raw 보존 일수. 기동 시 경과분을 삭제한다.</summary>
     public int RawRetentionDays { get; set; } = 90;
 
+    /// <summary>휴지통 보관 일수. 삭제한 지 이만큼 지난 세션은 매시간 확인해 영구 삭제한다. 0 이하면 자동 삭제하지 않는다.</summary>
+    public int TrashRetentionDays { get; set; } = 7;
+
     /// <summary>수신함 처리 묶음 간격(초). 새 업로드가 오면 이만큼 더 기다렸다가 그사이 도착분까지 한 번에 처리한다.</summary>
     public double InboxProcessIntervalSeconds { get; set; } = 2.0;
 
@@ -110,6 +113,7 @@ public static class Program
         builder.Services.AddSingleton(options);
         builder.Services.AddSingleton<CsvSessionStore>();
         builder.Services.AddSingleton<SessionSummary>();
+        builder.Services.AddSingleton<SessionTrash>();
         builder.Services.AddSingleton<UploadInbox>();
         builder.Services.AddHostedService<InboxProcessor>();
         builder.Services.AddSingleton<GameAnalytics>();
@@ -152,6 +156,13 @@ public static class Program
         app.MapGet("/api/analytics/insights", HandleInsights);
         app.MapDelete("/api/sessions/{sessionId}", HandleDeleteSession);
         app.MapDelete("/api/months/{month}", HandleDeleteMonth);
+        app.MapGet("/api/trash", (ServerOptions o, SessionTrash trash) =>
+            Results.Json(new TrashListResponse { RetentionDays = o.TrashRetentionDays, Items = trash.List() }, _jsonOptions));
+        app.MapPost("/api/trash/{sessionId}/restore", HandleRestoreTrash);
+        app.MapDelete("/api/trash/{sessionId}", (string sessionId, SessionTrash trash) =>
+            !CsvSessionStore.IsValidSessionId(sessionId) ? Results.BadRequest(new { error = "invalid sessionId" })
+            : trash.Purge(sessionId) ? Results.Json(new { sessionId, purged = true }, _jsonOptions) : Results.NotFound());
+        app.MapDelete("/api/trash", (SessionTrash trash) => Results.Json(new { purged = trash.PurgeAll() }, _jsonOptions));
         app.MapGet("/api/summary/{month}.csv", HandleSummary);
 
         PrepareStorage(options, app.Services.GetRequiredService<CsvSessionStore>(), app.Logger);
@@ -169,6 +180,28 @@ public static class Program
             {
                 app.Logger.LogWarning(e, "세션 요약 예열 실패");
             }
+        }));
+        // 휴지통 자동 비우기: 기동 직후와 매시간, 보관 일수가 지난 항목을 영구 삭제한다
+        app.Lifetime.ApplicationStarted.Register(() => Task.Run(async () =>
+        {
+            SessionTrash trash = app.Services.GetRequiredService<SessionTrash>();
+            using PeriodicTimer timer = new(TimeSpan.FromHours(1));
+            do
+            {
+                try
+                {
+                    int purged = trash.PurgeExpired();
+                    if (purged > 0)
+                    {
+                        app.Logger.LogInformation("휴지통 자동 삭제 {Count}건 (보관 {Days}일)", purged, options.TrashRetentionDays);
+                    }
+                }
+                catch (Exception e)
+                {
+                    app.Logger.LogWarning(e, "휴지통 자동 삭제 실패");
+                }
+            }
+            while (await timer.WaitForNextTickAsync(app.Lifetime.ApplicationStopping));
         }));
         app.Run();
     }
@@ -452,38 +485,49 @@ public static class Program
     }
 
     /// <summary>
-    /// DELETE /api/sessions/{sessionId} 처리기. 세션 CSV·raw·요약 행을 모두 지운다.
-    /// sessionId를 입력으로 사용하며 지운 것이 없으면 404, 있으면 200과 삭제 결과 JSON을 반환한다.
+    /// DELETE /api/sessions/{sessionId} 처리기. 세션 파일을 휴지통으로 옮기고 요약 행을 지운다.
+    /// sessionId를 입력으로 사용하며 옮긴 것이 없으면 404, 있으면 200과 결과 JSON을 반환한다.
     /// </summary>
-    private static IResult HandleDeleteSession(string sessionId, CsvSessionStore store, SessionSummary summary)
+    private static IResult HandleDeleteSession(string sessionId, SessionTrash trash)
     {
         if (!CsvSessionStore.IsValidSessionId(sessionId))
         {
             return Results.BadRequest(new { error = "invalid sessionId" });
         }
 
-        List<string> removedMonths = summary.RemoveSession(sessionId);
-        (bool deletedCsv, bool deletedRaw) = store.DeleteSessionFiles(sessionId);
-        if (!deletedCsv && !deletedRaw && removedMonths.Count == 0)
+        if (!trash.MoveToTrash(sessionId))
         {
             return Results.NotFound();
         }
 
-        Console.WriteLine($"delete session={sessionId} csv={deletedCsv} raw={deletedRaw} summaryMonths=[{string.Join(",", removedMonths)}]");
-        return Results.Json(new DeleteSessionResponse
-        {
-            SessionId = sessionId,
-            DeletedSessionCsv = deletedCsv,
-            DeletedRaw = deletedRaw,
-            RemovedSummaryMonths = removedMonths,
-        }, _jsonOptions);
+        Console.WriteLine($"trash session={sessionId}");
+        return Results.Json(new DeleteSessionResponse { SessionId = sessionId, MovedToTrash = true }, _jsonOptions);
     }
 
     /// <summary>
-    /// DELETE /api/months/{month} 처리기. 월의 모든 세션 파일과 요약 파일을 지운다.
-    /// month(yyyy-MM)를 입력으로 사용하며 지운 것이 없으면 404, 있으면 200과 삭제 결과 JSON을 반환한다.
+    /// POST /api/trash/{sessionId}/restore 처리기. 휴지통의 세션을 되살린다.
+    /// 없으면 404, 같은 세션 파일이 이미 있으면 409, 성공하면 200을 반환한다.
     /// </summary>
-    private static IResult HandleDeleteMonth(string month, CsvSessionStore store, SessionSummary summary)
+    private static IResult HandleRestoreTrash(string sessionId, SessionTrash trash)
+    {
+        if (!CsvSessionStore.IsValidSessionId(sessionId))
+        {
+            return Results.BadRequest(new { error = "invalid sessionId" });
+        }
+
+        return trash.Restore(sessionId) switch
+        {
+            TrashRestoreResult.Restored => Results.Json(new { sessionId, restored = true }, _jsonOptions),
+            TrashRestoreResult.Conflict => Results.Conflict(new { error = "같은 세션 파일이 이미 있어 복원하지 않았습니다" }),
+            _ => Results.NotFound(),
+        };
+    }
+
+    /// <summary>
+    /// DELETE /api/months/{month} 처리기. 월의 모든 세션을 휴지통으로 옮기고 월 요약 파일을 지운다.
+    /// month(yyyy-MM)를 입력으로 사용하며 지운 것이 없으면 404, 있으면 200과 결과 JSON을 반환한다.
+    /// </summary>
+    private static IResult HandleDeleteMonth(string month, SessionTrash trash, SessionSummary summary)
     {
         if (string.IsNullOrEmpty(month) || !_monthPattern.IsMatch(month))
         {
@@ -493,8 +537,7 @@ public static class Program
         int deletedSessions = 0;
         foreach (SessionRow row in summary.GetMonthSessions(month))
         {
-            (bool deletedCsv, bool _) = store.DeleteSessionFiles(row.SessionId);
-            if (deletedCsv)
+            if (trash.MoveToTrash(row.SessionId))
             {
                 deletedSessions++;
             }
@@ -506,7 +549,7 @@ public static class Program
             return Results.NotFound();
         }
 
-        Console.WriteLine($"delete month={month} sessions={deletedSessions} summaryFile={deletedSummaryFile}");
+        Console.WriteLine($"trash month={month} sessions={deletedSessions} summaryFile={deletedSummaryFile}");
         return Results.Json(new DeleteMonthResponse
         {
             Month = month,

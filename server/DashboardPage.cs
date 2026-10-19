@@ -108,6 +108,7 @@ nav.pages b { color: var(--text); font-weight: 600; }
       <select id="month" style="min-width:170px"></select>
       <button id="refresh">새로고침</button>
       <span class="spacer"></span>
+      <button id="trashtoggle">휴지통 <span id="trashcount" class="muted"></span></button>
       <button id="delmonth" class="danger">이 달 전체 삭제</button>
     </div>
     <div id="monthstats" class="stats"></div>
@@ -132,6 +133,23 @@ nav.pages b { color: var(--text); font-weight: 600; }
         <tbody id="sbody"></tbody>
       </table>
       <div id="sempty" class="empty" hidden>해당 월에 세션이 없습니다.</div>
+    </div>
+  </section>
+
+  <section class="card" id="trash" hidden>
+    <div class="row">
+      <h2>휴지통</h2>
+      <span id="trashinfo" class="muted"></span>
+      <span class="spacer"></span>
+      <button id="trashempty" class="danger">휴지통 비우기</button>
+      <button id="trashclose">닫기</button>
+    </div>
+    <div class="tablewrap">
+      <table>
+        <thead><tr><th>삭제(로컬)</th><th>자동 삭제 예정</th><th>시작(로컬)</th><th>플랫폼</th><th>버전</th><th>로그</th><th>세션 ID</th><th></th></tr></thead>
+        <tbody id="trashbody"></tbody>
+      </table>
+      <div id="trashnone" class="empty" hidden>휴지통이 비어 있습니다.</div>
     </div>
   </section>
 
@@ -430,6 +448,48 @@ function toggleRow(tr, e) {
 async function refreshAll() {
   await loadMonths(state.month);
   await loadSessions();
+  await loadTrash();
+}
+
+// ─── 휴지통 ───
+async function loadTrash() {
+  const data = await (await api("/api/trash")).json();
+  $("trashcount").textContent = data.items.length ? "(" + num(data.items.length) + ")" : "";
+  $("trashinfo").textContent = "삭제한 세션은 " + data.retentionDays + "일 동안 보관한 뒤 자동으로 영구 삭제됩니다 · " + num(data.items.length) + "건";
+  $("trashnone").hidden = data.items.length > 0;
+  $("trashempty").disabled = data.items.length === 0;
+  const body = $("trashbody");
+  body.innerHTML = "";
+  for (const item of data.items) {
+    const r = item.row || {};
+    const tr = document.createElement("tr");
+    tr.innerHTML =
+      "<td>" + esc(toLocal(item.deletedUtc)) + "</td>" +
+      "<td>" + esc(toLocal(item.purgeAtUtc)) + "</td>" +
+      "<td>" + esc(r.dateUtc ? toLocal(r.dateUtc) : "–") + "</td>" +
+      "<td>" + esc(r.platform || "–") + "</td>" +
+      "<td>" + esc(r.appVersion || "–") + "</td>" +
+      "<td>" + (r.total != null ? num(r.total) : "–") + "</td>" +
+      '<td class="id">' + esc(item.sessionId) + "</td>" +
+      '<td style="white-space:nowrap"><button data-act="restore">복원</button> <button data-act="purge" class="danger">영구 삭제</button></td>';
+    tr.querySelector('[data-act="restore"]').onclick = () => trashAction(item.sessionId, "restore");
+    tr.querySelector('[data-act="purge"]').onclick = () => trashAction(item.sessionId, "purge");
+    body.appendChild(tr);
+  }
+}
+
+async function trashAction(id, act) {
+  try {
+    if (act === "restore") {
+      await api("/api/trash/" + encodeURIComponent(id) + "/restore", { method: "POST" });
+      setStatus("세션 복원 완료 — " + id);
+    } else {
+      if (!confirm("세션 " + id + " 을 영구 삭제합니다. 되돌릴 수 없습니다. 계속할까요?")) return;
+      await api("/api/trash/" + encodeURIComponent(id), { method: "DELETE" });
+      setStatus("영구 삭제 완료 — " + id);
+    }
+    await refreshAll();
+  } catch (err) { setStatus(String(err.message || err), true); }
 }
 
 async function connect() {
@@ -466,23 +526,41 @@ $("dcsv").onclick = () => state.session && download("/api/sessions/" + encodeURI
 $("draw").onclick = () => state.session && download("/api/sessions/" + encodeURIComponent(state.session) + "/raw");
 $("ddel").onclick = async () => {
   const id = state.session;
-  if (!id || !confirm("세션 " + id + " 의 CSV·raw·요약 행을 모두 삭제합니다. 계속할까요?")) return;
+  if (!id || !confirm("세션 " + id + " 을 휴지통으로 옮깁니다. 휴지통에서 7일 안에 복원할 수 있습니다. 계속할까요?")) return;
   try {
     await api("/api/sessions/" + encodeURIComponent(id), { method: "DELETE" });
-    setStatus("세션 삭제 완료 — " + id);
+    setStatus("휴지통으로 이동 — " + id);
     await refreshAll();
   } catch (err) { setStatus(String(err.message || err), true); }
 };
 $("delmonth").onclick = async () => {
   const month = state.month;
   if (!month) return;
-  if (!confirm(month + " 의 모든 세션(CSV·raw)과 요약을 삭제합니다. 되돌릴 수 없습니다. 계속할까요?")) return;
+  if (!confirm(month + " 의 모든 세션을 휴지통으로 옮기고 월 요약을 지웁니다. 휴지통에서 세션별로 복원할 수 있습니다. 계속할까요?")) return;
   if (prompt("확인하려면 월 키를 입력하세요: " + month) !== month) { setStatus("삭제 취소"); return; }
   try {
     const res = await api("/api/months/" + month, { method: "DELETE" });
     const data = await res.json();
-    setStatus("월 삭제 완료 — " + data.month + " (세션 " + data.deletedSessions + "건)");
+    setStatus("휴지통으로 이동 — " + data.month + " (세션 " + data.deletedSessions + "건)");
     await refreshAll();
+  } catch (err) { setStatus(String(err.message || err), true); }
+};
+
+$("trashtoggle").onclick = async () => {
+  const box = $("trash");
+  box.hidden = !box.hidden;
+  if (!box.hidden) {
+    try { await loadTrash(); box.scrollIntoView({ behavior: "smooth", block: "start" }); }
+    catch (err) { setStatus(String(err.message || err), true); }
+  }
+};
+$("trashclose").onclick = () => { $("trash").hidden = true; };
+$("trashempty").onclick = async () => {
+  if (!confirm("휴지통의 모든 세션을 영구 삭제합니다. 되돌릴 수 없습니다. 계속할까요?")) return;
+  try {
+    const data = await (await api("/api/trash", { method: "DELETE" })).json();
+    setStatus("휴지통 비움 — " + data.purged + "건");
+    await loadTrash();
   } catch (err) { setStatus(String(err.message || err), true); }
 };
 

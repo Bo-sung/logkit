@@ -306,14 +306,8 @@ public sealed class DeleteSessionResponse
     /// <summary>삭제한 세션 식별자.</summary>
     public string SessionId { get; set; } = string.Empty;
 
-    /// <summary>세션 CSV를 삭제했으면 true.</summary>
-    public bool DeletedSessionCsv { get; set; }
-
-    /// <summary>raw gzip을 삭제했으면 true.</summary>
-    public bool DeletedRaw { get; set; }
-
-    /// <summary>요약 행을 제거한 월 목록.</summary>
-    public List<string> RemovedSummaryMonths { get; set; } = new();
+    /// <summary>세션을 휴지통으로 옮겼으면 true.</summary>
+    public bool MovedToTrash { get; set; }
 }
 
 /// <summary>DELETE /api/months/{month} 응답 본문.</summary>
@@ -322,7 +316,7 @@ public sealed class DeleteMonthResponse
     /// <summary>삭제한 월 키(yyyy-MM).</summary>
     public string Month { get; set; } = string.Empty;
 
-    /// <summary>세션 파일을 삭제한 세션 수.</summary>
+    /// <summary>휴지통으로 옮긴 세션 수.</summary>
     public int DeletedSessions { get; set; }
 
     /// <summary>월 요약 파일을 삭제했으면 true.</summary>
