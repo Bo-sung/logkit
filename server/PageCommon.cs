@@ -9,13 +9,17 @@ public static class PageCommon
     /// <summary>공통 CSS(어두운 표면 토큰, 카드, 표, 차트, 툴팁).</summary>
     public const string Css = """
 :root {
-  --bg: #0d1117; --panel: #161b22; --border: #30363d; --text: #e6edf3;
-  --muted: #8b949e; --accent: #58a6ff; --err: #f85149;
-  --grid: #2c2c2a; --axis: #383835;
+  --bg: #0f1115; --panel: #1a1d24; --border: #2a2e37; --grid: #2a2e37;
+  --text: #e6edf3; --muted: #8b949e;
+  --series: #4f8cff, #34d399, #fbbf24, #f87171, #a78bfa, #22d3ee;
+  --ok: #3fb950; --warn: #d29922; --bad: #f85149; --exc: #bc8cff;
+  --accent: var(--c0);
 }
+body { margin: 0; background: var(--bg); color: var(--text);
+  font: 13px/1.5 system-ui, "Malgun Gothic", sans-serif; }
 * { box-sizing: border-box; }
 body { margin: 0; background: var(--bg); color: var(--text);
-  font: 13px/1.5 "Segoe UI", "Malgun Gothic", sans-serif; }
+  font: 13px/1.5 system-ui, "Malgun Gothic", sans-serif; }
 header { display: flex; align-items: center; gap: 12px; padding: 10px 16px; flex-wrap: wrap;
   background: var(--panel); border-bottom: 1px solid var(--border); position: sticky; top: 0; z-index: 5; }
 .brand { font-weight: 700; font-size: 15px; letter-spacing: 1px; }
@@ -86,7 +90,7 @@ tr.group td { background: #1c2128; color: var(--muted); font-size: 11.5px; lette
 .heatgrid canvas { width: 100%; aspect-ratio: 1; display: block; border: 1px solid var(--border); border-radius: 6px;
   background: #12261b; }
 .heatgrid .cap { font-size: 12px; margin-bottom: 4px; display: flex; align-items: center; }
-.ramp { height: 8px; width: 160px; border-radius: 4px; background: linear-gradient(90deg, #104281, #3987e5, #cde2fb); }
+.ramp { height: 8px; width: 160px; border-radius: 4px; background: linear-gradient(90deg, #104281, #4f8cff, #cde2fb); }
 .ramp.pitch { background: linear-gradient(90deg, #12261b, #1a9850, #91cf60, #fee08b, #fc8d59, #d73027); }
 .missing { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 8px; }
 .missing div { border: 1px dashed var(--border); border-radius: 6px; padding: 8px 10px; color: var(--muted); font-size: 12px; }
@@ -108,9 +112,9 @@ details pre { font: 11.5px/1.6 Consolas, monospace; background: #0d1117; border:
 // 페이지 스크립트가 ENDPOINT(집계 API 경로), PREF_STORE(설정 저장 키), render()를 정의한다.
 const $ = (id) => document.getElementById(id);
 const KEY_STORE = "logkit.key";
-// 어두운 표면용 범주형 팔레트(검증된 순서). 색은 버전에 고정되며 선택 순서가 아닌 슬롯 배정으로 유지된다.
-const PALETTE = ["#3987e5", "#d95926", "#199e70", "#c98500", "#d55181", "#008300", "#9085e9", "#e66767"];
-const MAX_SELECTED = PALETTE.length;
+// 공통 시리즈 팔레트(고정 순서).
+const SERIES = ["#4f8cff", "#34d399", "#fbbf24", "#f87171", "#a78bfa", "#22d3ee"];
+const MAX_SELECTED = SERIES.length;
 const state = { data: null, selected: [], colorOf: {} };
 
 function esc(s) {
@@ -706,16 +710,88 @@ async function load() {
   }
 }
 
-// 툴팁: data-tip 속성을 가진 표식 위에서 표시
-const tip = $("tip");
-document.addEventListener("mousemove", (ev) => {
-  const t = ev.target.closest && ev.target.closest("[data-tip]");
-  if (!t) { tip.style.display = "none"; return; }
-  tip.textContent = t.getAttribute("data-tip");
-  tip.style.display = "block";
+// ─── 공통 차트 키트 ───
+const tip = document.getElementById("tip");
+function tipShow(ev, text) {
+  tip.textContent = text; tip.style.display = "block";
   const x = Math.min(ev.clientX + 14, window.innerWidth - tip.offsetWidth - 8);
   const y = Math.min(ev.clientY + 14, window.innerHeight - tip.offsetHeight - 8);
   tip.style.left = x + "px"; tip.style.top = y + "px";
+}
+function tipHide() { tip.style.display = "none"; }
+function seriesColor(i) { return SERIES[i % SERIES.length]; }
+function axisFmt(v) { return num(v, 1); }
+
+/** 막대(bar): 값/최대 → 높이. */
+function bar(el, value, max, i) {
+  const pct = max > 0 ? Math.max(0, Math.min(1, value / max)) : 0;
+  return '<div class="bar" style="background:' + seriesColor(i) + ';height:' + (pct * 100) + '%"></div>';
+}
+/** 그룹 막대(항목 × 시리즈 묶음). */
+function groupBar(el, rows, keys, valueOf) {
+  if (keys.length === 0) { el.innerHTML = emptyBox("기록된 데이터가 없습니다."); return; }
+  const W = widthOf(el), rowH = 26, gap = 3;
+  const H = rows.length * (rowH + gap) + 4;
+  let s = "";
+  rows.forEach((r, ri) => {
+    keys.forEach((k, ki) => {
+      const v = valueOf(r, k);
+      const x = ki * 60, y = ri * (rowH + gap);
+      s += '<rect x="' + x + '" y="' + y + '" width="40" height="' + rowH + '" fill="' + seriesColor(ki) + '"/>';
+    });
+  });
+  el.innerHTML = legendHtml(rows.map((r) => r.version)) + '<svg viewBox="0 0 ' + W + " " + H + '">' + s + '</svg>';
+}
+/** 스택 막대. */
+function stackBar(el, segments) {
+  const total = segments.reduce((a, s) => a + s.value, 0) || 1;
+  let acc = 0;
+  let html = segments.map((s, i) => {
+    const seg = '<rect x="' + acc + '" y="0" width="' + (s.value / total * 100) + '%" height="100%" fill="' + seriesColor(i) + '"/>';
+    acc += s.value;
+    return seg;
+  }).join('');
+  el.innerHTML = '<div class="stack">' + html + '</div>';
+}
+/** 선. points: [{x, y}] 목록. */
+function lineChart(el, points, color) {
+  const W = widthOf(el), H = 200;
+  const d = points.map((p) => ((p.x * W / 100).toFixed(1)) + "," + (H - p.y * H / 100).toFixed(1)).join(" ");
+  el.innerHTML = '<svg viewBox="0 0 ' + W + ' ' + H + '"><polyline fill="none" stroke="' + color + '" stroke-width="2" points="' + d + '"/></svg>';
+}
+/** 영역: 선 아래 채움. */
+function areaChart(el, points, color) {
+  const W = widthOf(el), H = 200;
+  const d = points.map((p) => ((p.x * W / 100).toFixed(1)) + "," + (H - p.y * H / 100).toFixed(1)).join(" ");
+  el.innerHTML = '<svg viewBox="0 0 ' + W + ' ' + H + '"><polygon points="0,' + H + ' ' + d + ' ' + W + ',' + H + '" fill="' + color + '" fill-opacity="0.2"/><polyline fill="none" stroke="' + color + '" stroke-width="2" points="' + d + '"/></svg>';
+}
+/** 히트맵: grid×grid cells 배열. */
+function heatmap(el, cells, grid) {
+  const W = widthOf(el), cell = W / grid;
+  let rects = "";
+  cells.forEach((v, i) => {
+    const r = Math.floor(i / grid), c = i % grid;
+    rects += '<rect x="' + (c * cell) + '" y="' + (r * cell) + '" width="' + cell + '" height="' + cell + '" fill="' + seriesColor(i % SERIES.length) + '"/>';
+  });
+  el.innerHTML = '<svg viewBox="0 0 ' + W + ' ' + W + '">' + rects + '</svg>';
+}
+/** 박스플롯 공통 래퍼: 요약 통계 표시. */
+function boxplot(el, stats) {
+  if (!stats) { el.innerHTML = emptyBox("기록된 데이터가 없습니다."); return; }
+  const b = stats;
+  el.innerHTML = '<div class="box">' + ['min','q1','med','q3','max'].map((k) => {
+    const v = b[k] != null ? num(b[k], 1) : "–";
+    return '<span>' + k + ':' + v + '</span>';
+  }).join('') + '</div>';
+}
+/** 범례/축 포맷터. */
+function legendHtml(items) { return '<div class="legend">' + items.map((i) => '<span><i style="background:' + seriesColor(0) + '"></i>' + esc(i) + '</span>').join('') + '</div>'; }
+
+// data-tip 표식 위에서 표시
+document.addEventListener("mousemove", (ev) => {
+  const t = ev.target.closest && ev.target.closest("[data-tip]");
+  if (!t) { tipHide(); return; }
+  tipShow(ev, t.getAttribute("data-tip"));
 });
 
 /** 머리글 컨트롤을 연결하고 저장된 키가 있으면 바로 불러온다. 페이지 스크립트 끝에서 부른다. */

@@ -5,6 +5,7 @@ namespace LogServer;
 /// 외부 자산 없이 vanilla JS로 동작하며 조회·검색·삭제 API를 호출한다. API 키는 localStorage에 보관한다.
 /// </summary>
 public static class DashboardPage
+// 차트 색 기준: PageCommon.SERIES / var(--series)
 {
     /// <summary>대시보드 페이지 전체 HTML.</summary>
     public const string Html = """
@@ -16,9 +17,9 @@ public static class DashboardPage
 <title>LogKit GM</title>
 <style>
 :root {
-  --bg: #0d1117; --panel: #161b22; --border: #30363d; --text: #e6edf3;
-  --muted: #8b949e; --accent: #58a6ff; --ok: #3fb950; --warn: #d29922;
-  --err: #f85149; --exc: #bc8cff;
+  --bg: var(--bg); --panel: var(--panel); --border: var(--border); --text: var(--text);
+  --muted: var(--muted); --accent: #58a6ff; --ok: var(--ok); --warn: var(--warn);
+  --err: var(--bad); --exc: var(--exc);
 }
 * { box-sizing: border-box; }
 body { margin: 0; background: var(--bg); color: var(--text);
@@ -32,7 +33,7 @@ header { display: flex; align-items: center; gap: 12px; padding: 10px 16px;
 .spacer { flex: 1; }
 .keybox { display: flex; gap: 6px; }
 input, select, button {
-  background: #0d1117; color: var(--text); border: 1px solid var(--border);
+  background: var(--bg); color: var(--text); border: 1px solid var(--border);
   border-radius: 6px; padding: 5px 8px; font: inherit;
 }
 input:focus, select:focus { outline: 1px solid var(--accent); }
@@ -52,27 +53,27 @@ main { max-width: 1400px; margin: 0 auto; padding: 14px 16px; display: flex; fle
 table { border-collapse: collapse; width: 100%; }
 th, td { padding: 5px 10px; text-align: left; border-bottom: 1px solid var(--border);
   white-space: nowrap; font-size: 12.5px; }
-th { position: sticky; top: 0; background: #1c2128; color: var(--muted); font-weight: 600; z-index: 1; }
+th { position: sticky; top: 0; background: var(--panel); color: var(--muted); font-weight: 600; z-index: 1; }
 tbody tr.click { cursor: pointer; }
-tbody tr.click:hover { background: #1c2128; }
-tbody tr.sel { background: #14243a; }
+tbody tr.click:hover { background: var(--panel); }
+tbody tr.sel { background: var(--panel); }
 td.msg { white-space: normal; max-width: 560px; overflow: hidden; text-overflow: ellipsis; }
 td.id { color: var(--muted); font-family: Consolas, monospace; font-size: 12px; }
 .lv { display: inline-block; min-width: 58px; text-align: center; border-radius: 4px;
   font-size: 11px; font-weight: 600; padding: 1px 6px; }
-.lv.info { background: #21262d; color: var(--muted); }
-.lv.warning { background: #33270f; color: var(--warn); }
-.lv.error, .lv.assert { background: #3a1214; color: var(--err); }
-.lv.exception { background: #271439; color: var(--exc); }
+.lv.info { background: var(--muted); color: var(--muted); }
+.lv.warning { background: var(--warn); color: var(--warn); }
+.lv.error, .lv.assert { background: var(--bad); color: var(--err); }
+.lv.exception { background: var(--exc); color: var(--exc); }
 .badge { border-radius: 4px; font-size: 11px; padding: 1px 6px; }
-.badge.ok { background: #12261e; color: var(--ok); }
-.badge.crash { background: #3a1214; color: var(--err); }
-.badge.ed { background: #14243a; color: var(--accent); }
-tr.xrow td { background: #0d1117; white-space: normal; }
-tr.xrow pre { margin: 4px 0; padding: 8px; background: #161b22; border: 1px solid var(--border);
+.badge.ok { background: var(--ok); color: var(--ok); }
+.badge.crash { background: var(--bad); color: var(--err); }
+.badge.ed { background: var(--panel); color: var(--accent); }
+tr.xrow td { background: var(--bg); white-space: normal; }
+tr.xrow pre { margin: 4px 0; padding: 8px; background: var(--panel); border: 1px solid var(--border);
   border-radius: 6px; overflow: auto; max-height: 260px; font: 11.5px/1.5 Consolas, monospace; white-space: pre-wrap; }
 .xlabel { color: var(--muted); font-size: 11px; display: block; margin-top: 6px; }
-.chip { display: inline-block; background: #0d1117; border: 1px solid var(--border); border-radius: 12px;
+.chip { display: inline-block; background: var(--bg); border: 1px solid var(--border); border-radius: 12px;
   padding: 2px 10px; margin: 2px 4px 2px 0; font-size: 12px; color: var(--muted); }
 .chip b { color: var(--text); font-weight: 600; }
 .chip.rate { border-color: var(--accent); }

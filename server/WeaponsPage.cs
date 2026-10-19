@@ -5,6 +5,7 @@ namespace LogServer;
 /// 동시 사용, 빌드 크기, 인기 구성을 화면에서 계산해 그린다. 공통 스타일·스크립트는 PageCommon을 쓴다.
 /// </summary>
 public static class WeaponsPage
+// 차트 색 기준: PageCommon.SERIES / var(--series)
 {
     /// <summary>총기 통계 페이지 전체 HTML.</summary>
     public const string Html = """
@@ -461,7 +462,7 @@ function renderMatrix(vs) {
       : a + " + " + b + "\n함께 들어간 비율 " + pct(r) + " (" + num(n, 0) + " / " + num(v._total, 0) + basis().unit + ")" +
         "\n" + a + "가 들어간 것 중 " + pct(ratio(n, v._parts.get(a).guns)) + " · 독립 가정 대비 " + num(lift, 2) + "배";
     s += '<rect x="' + x + '" y="' + y + '" width="' + size + '" height="' + size + '" rx="3" fill="' +
-      (n ? rgb(Math.sqrt(r / (max || 1))) : "#0d1117") + '" stroke="' + (i === j ? "var(--muted)" : "none") +
+      (n ? rgb(Math.sqrt(r / (max || 1))) : "var(--bg)") + '" stroke="' + (i === j ? "var(--muted)" : "none") +
       '" data-tip="' + esc(tipText) + '"/>';
   }));
   box.innerHTML = '<svg width="' + W + '" height="' + H + '" viewBox="0 0 ' + W + " " + H + '">' + s + "</svg>";
@@ -543,7 +544,7 @@ function renderStages(vs) {
       const n = byPart.get(name).get(s) || 0;
       const r = ratio(n, shots.get(s));
       if (r == null) return '<td class="na">–</td>';
-      const bg = n ? "background:" + rgb(Math.sqrt(r)) + ";color:" + (r > 0.45 ? "#0d1117" : "var(--text)") : "";
+      const bg = n ? "background:" + rgb(Math.sqrt(r)) + ";color:" + (r > 0.45 ? "var(--bg)" : "var(--text)") : "";
       return '<td style="' + bg + '" data-tip="' + esc(v.version + " · " + s + " · " + name + "\n" + pct(r) + " (" + num(n, 0) + " / " + num(shots.get(s), 0) + "발)") + '">' + pct(r, 0) + "</td>";
     }).join("") + "</tr>";
   }

@@ -119,7 +119,7 @@ GM툴이 세션 로그를 하나씩 보는 화면이라면, `http://localhost:50
 
 ### 집계 기준 — 게임이 남기는 이벤트
 
-category와 message로 식별하고 data_json 필드를 읽는다. 규칙은 `armory-dashboard/README.md`와 같다. 상점 이벤트는 초기 빌드의 한글 이름과 이후 `ShopLogCollector`의 eventType 이름을 모두 받는다.
+category와 message로 식별하고 data_json 필드를 읽는다. 규칙은 `gggg-dashboard/README.md`와 같다. 상점 이벤트는 초기 빌드의 한글 이름과 이후 `ShopLogCollector`의 eventType 이름을 모두 받는다.
 
 | category | message | data_json | 집계 |
 | --- | --- | --- | --- |

@@ -10,4 +10,12 @@
     <GarbageCollectionAdaptationMode>1</GarbageCollectionAdaptationMode>
   </PropertyGroup>
 
+  <!-- 게임 이벤트 규약·카탈로그 JSON은 출력 디렉터리로 복사해 기동 시 함께 로딩한다 -->
+  <ItemGroup>
+    <None Update="GameConfig\game-events.json" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+    <None Update="GameConfig\raid-stages.json" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+    <None Update="GameConfig\module-catalog.json" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+    <None Update="GameConfig\customer-catalog.json" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+  </ItemGroup>
+
 </Project>

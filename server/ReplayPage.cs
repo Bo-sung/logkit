@@ -5,6 +5,7 @@ namespace LogServer;
 /// 한 버전·한 스테이지의 모든 습격을 같은 시간축(습격 시작 후 게임 초)에 겹쳐 canvas로 재생한다. 공통 스타일·스크립트는 PageCommon을 쓴다.
 /// </summary>
 public static class ReplayPage
+// 차트 색 기준: PageCommon.SERIES / var(--series)
 {
     /// <summary>리플레이 페이지 전체 HTML.</summary>
     public const string Html = """
@@ -19,7 +20,7 @@ public static class ReplayPage
     + PageCommon.Css + """
 
 .stage { position: relative; }
-#field { width: 100%; aspect-ratio: 1; display: block; border: 1px solid var(--border); border-radius: 6px; background: #12261b; cursor: crosshair; }
+#field { width: 100%; aspect-ratio: 1; display: block; border: 1px solid var(--border); border-radius: 6px; background: var(--panel); cursor: crosshair; }
 .controls { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
 .controls input[type=range] { flex: 1; min-width: 200px; accent-color: var(--accent); }
 #play { min-width: 74px; font-weight: 600; }
@@ -29,12 +30,12 @@ public static class ReplayPage
 .list { max-height: 640px; overflow: auto; border: 1px solid var(--border); border-radius: 6px; }
 .list table td, .list table th { padding: 4px 8px; }
 .list tr.dim td { opacity: .45; }
-.list tr.solo td { background: #1f2a3a; }
+.list tr.solo td { background: var(--panel); }
 .list tr { cursor: pointer; }
 .dot { display: inline-block; width: 9px; height: 9px; border-radius: 50%; margin-right: 4px; vertical-align: middle; }
 .stats { display: flex; gap: 14px; flex-wrap: wrap; font-size: 12px; color: var(--muted); margin-top: 6px; }
 .stats b { color: var(--text); font-variant-numeric: tabular-nums; }
-.legend i.ring { background: none; border: 2px solid #f85149; border-radius: 50%; }
+.legend i.ring { background: none; border: 2px solid var(--bad); border-radius: 50%; }
 </style>
 </head>
 <body>
@@ -95,7 +96,7 @@ public static class ReplayPage
       <label class="chk"><input type="checkbox" id="mapbg" checked> 맵 배경</label>
       <div class="legend" style="margin:0 0 0 auto">
         <span><i style="background:#58a6ff"></i>탈출 성공</span><span><i style="background:#f0883e"></i>사망</span>
-        <span><i style="background:#3fb950"></i>엔딩 종료</span><span><i style="background:#8b949e"></i>결과 미기록</span>
+        <span><i style="background:var(--ok)"></i>엔딩 종료</span><span><i style="background:var(--muted)"></i>결과 미기록</span>
         <span><i style="background:#ffd33d"></i>발사</span><span><i class="ring"></i>피격</span>
       </div>
     </div>
@@ -148,7 +149,7 @@ public static class ReplayPage
 "use strict";
 const ENDPOINT = "/api/analytics/replay";
 const PREF_STORE = "logkit.replay";
-const OUTCOME_COLOR = { success: "#58a6ff", fail: "#f0883e", ending: "#3fb950", unknown: "#8b949e" };
+const OUTCOME_COLOR = { success: "#58a6ff", fail: "#f0883e", ending: "var(--ok)", unknown: "var(--muted)" };
 const OUTCOME_NAME = { success: "탈출 성공", fail: "사망", ending: "엔딩 종료", unknown: "미기록" };
 const STRIDE = 5;
 const rp = { raids: [], t: 0, maxT: 0, playing: false, last: 0, solo: null, bounds: null, bg: null };
@@ -331,7 +332,7 @@ function draw() {
       }
     }
     if ($("showhits").checked) {
-      ctx.strokeStyle = "#f85149";
+      ctx.strokeStyle = "var(--bad)";
       ctx.lineWidth = 2.5 * sc;
       for (let k = 0; k < r.hits.length; k += 3) {
         const age = t - r.hits[k];
@@ -361,7 +362,7 @@ function draw() {
         ctx.beginPath(); ctx.moveTo(px, py); ctx.lineTo(px + Math.sin(a) * len, py - Math.cos(a) * len); ctx.stroke();
       }
       ctx.fillStyle = col;
-      ctx.strokeStyle = "#0d1117";
+      ctx.strokeStyle = "var(--bg)";
       ctx.lineWidth = 2 * sc;
       ctx.beginPath(); ctx.arc(px, py, (rp.solo === r.i ? 7 : 5) * sc, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
     }

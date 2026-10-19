@@ -5,6 +5,7 @@ namespace LogServer;
 /// 화면에서 계산해 그린다. 플레이어 단위는 세션이다. 공통 스타일·스크립트는 PageCommon을 쓴다.
 /// </summary>
 public static class InsightsPage
+// 차트 색 기준: PageCommon.SERIES / var(--series)
 {
     /// <summary>가설·일반 통계 페이지 전체 HTML.</summary>
     public const string Html = """
@@ -26,7 +27,7 @@ public static class InsightsPage
 .cells svg { display: block; width: 100%; height: auto; }
 .cells text { fill: var(--muted); font-size: 11px; font-variant-numeric: tabular-nums; }
 .cells text.lbl { fill: var(--text); }
-.ramp.rate { background: linear-gradient(90deg, #104281, #3987e5, #cde2fb); }
+.ramp.rate { background: linear-gradient(90deg, #104281, SERIES[0], #cde2fb); }
 .basever { display: inline-block; margin-left: 8px; padding: 0 7px; border: 1px solid var(--grid); border-radius: 10px;
   font-size: 11px; font-weight: 400; color: var(--muted); vertical-align: middle; }
 .basever:empty { display: none; }
@@ -565,7 +566,7 @@ public static class InsightsPage
 const ENDPOINT = "/api/analytics/insights";
 const PREF_STORE = "logkit.insights";
 const MIN_NPC_ORDERS = 2;
-const NEUTRAL = "#484f58";
+const NEUTRAL = "var(--border)";
 const RULE_DEFAULT = { pen: 8, exp: 11, spread: 1, rate: 1, heat: 2, grav: 1 };
 state.rule = Object.assign({}, RULE_DEFAULT, loadPrefs().rule || {});
 
@@ -639,10 +640,10 @@ function cellmap(el, rowLabels, colLabels, cell, xTitle, yTitle) {
     colLabels.forEach((c, j) => {
       const v = cell(i, j);
       const x = labelW + j * cw;
-      if (!v) { s += '<rect x="' + (x + 1) + '" y="' + (y + 1) + '" width="' + (cw - 2) + '" height="' + (ch - 2) + '" rx="3" fill="#0d1117" stroke="var(--grid)"/>'; return; }
+      if (!v) { s += '<rect x="' + (x + 1) + '" y="' + (y + 1) + '" width="' + (cw - 2) + '" height="' + (ch - 2) + '" rx="3" fill="var(--bg)" stroke="var(--grid)"/>'; return; }
       const rgbv = ramp(v.t), light = rgbv[0] * 0.299 + rgbv[1] * 0.587 + rgbv[2] * 0.114 > 140;
       s += '<rect x="' + (x + 1) + '" y="' + (y + 1) + '" width="' + (cw - 2) + '" height="' + (ch - 2) + '" rx="3" fill="rgb(' + rgbv.join(",") + ')" data-tip="' + esc(v.tip) + '"/>';
-      if (cw >= 30) s += '<text x="' + (x + cw / 2) + '" y="' + (y + ch / 2 + 4) + '" text-anchor="middle" style="fill:' + (light ? "#0d1117" : "#e6edf3") + ';pointer-events:none">' + esc(v.text) + "</text>";
+      if (cw >= 30) s += '<text x="' + (x + cw / 2) + '" y="' + (y + ch / 2 + 4) + '" text-anchor="middle" style="fill:' + (light ? "var(--bg)" : "var(--text)") + ';pointer-events:none">' + esc(v.text) + "</text>";
     });
   });
   s += '<text x="' + (labelW + colLabels.length * cw / 2) + '" y="' + (H - 4) + '" text-anchor="middle">' + esc(xTitle) + "</text>";
@@ -657,7 +658,7 @@ function heatVersion() {
 }
 
 // ─── 낮·밤 플레이 타임과 이탈 ───
-const SLOTS = [{ night: false, name: "낮", color: "#c98500" }, { night: true, name: "밤", color: "#3987e5" }];
+const SLOTS = [{ night: false, name: "낮", color: "SERIES[2]" }, { night: true, name: "밤", color: "SERIES[0]" }];
 /** 버전 v의 n일차 낮 또는 밤 구간 집계(플레이 시간 박스, 도달·이탈 인원과 이탈 사유). */
 function phaseCell(v, d, night, raidOnly, withEnded) {
   const timeOf = (p) => p.night && raidOnly ? p.raidSeconds : p.seconds;
@@ -837,7 +838,7 @@ function dayNightBox(el, v, days, valuesOf, fmt) {
     });
     s += '<text x="' + (left + groupW * c + groupW / 2) + '" y="' + (H - 8) + '" text-anchor="middle">' + esc(dayLabel(d)) + "</text>";
   });
-  el.innerHTML = '<div class="legend"><span><i style="background:#c98500"></i>낮</span><span><i style="background:#3987e5"></i>밤</span></div>' +
+  el.innerHTML = '<div class="legend"><span><i style="background:SERIES[2]"></i>낮</span><span><i style="background:SERIES[0]"></i>밤</span></div>' +
     '<svg viewBox="0 0 ' + W + " " + H + '">' + s + "</svg>";
 }
 
@@ -1073,7 +1074,7 @@ function stageOrder(scenes) {
     return (ia < 0 ? 999 : ia) - (ib < 0 ? 999 : ib) || a.localeCompare(b);
   });
 }
-const STAGE_COLORS = ["#8b949e", "#3987e5", "#c98500", "#199e70", "#d95926", "#9085e9", "#d55181", "#008300"];
+const STAGE_COLORS = ["var(--muted)", "SERIES[0]", "SERIES[2]", "SERIES[1]", "SERIES[3]", "SERIES[4]", "SERIES[3]", "SERIES[5]"];
 const stageColor = (scene) => {
   const i = state.data.stages.findIndex((s) => s.scene === scene);
   return STAGE_COLORS[(i < 0 ? state.data.stages.length + 1 : i) % STAGE_COLORS.length];

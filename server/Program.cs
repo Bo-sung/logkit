@@ -15,6 +15,9 @@ public sealed class ServerOptions
     /// <summary>X-Api-Key 헤더와 비교할 키. Unity 클라이언트 기본값과 맞춘 개발용 키는 dev-log-key.</summary>
     public string ApiKey { get; set; } = "dev-log-key";
 
+    /// <summary>WeaponCode HMAC 무결성 키 문자열(기본 현재 값 유지로 클라이언트 호환).</summary>
+    public string WeaponCodeHmacKey { get; set; } = "WGG.weapon-code.v1.compact-integrity";
+
     /// <summary>세션·요약·raw 저장 루트 디렉터리.</summary>
     public string DataPath { get; set; } = "data";
 
@@ -110,6 +113,10 @@ public static class Program
         WebApplicationBuilder builder = WebApplication.CreateBuilder(args);
 
         ServerOptions options = builder.Configuration.Get<ServerOptions>() ?? new ServerOptions();
+        WeaponCode.HmacKey = options.WeaponCodeHmacKey;
+        GameConfig.Load(builder.Environment.ContentRootPath);
+        ModuleCatalog.Load(Path.Combine(builder.Environment.ContentRootPath, GameConfig.ConfigDirectoryName, "module-catalog.json"));
+        CustomerCatalog.Load(Path.Combine(builder.Environment.ContentRootPath, GameConfig.ConfigDirectoryName, "customer-catalog.json"));
         builder.Services.AddSingleton(options);
         builder.Services.AddSingleton<CsvSessionStore>();
         builder.Services.AddSingleton<SessionSummary>();

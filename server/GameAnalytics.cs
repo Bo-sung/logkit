@@ -6,7 +6,7 @@ namespace LogServer;
 
 /// <summary>
 /// 게임이 실제로 남기는 이벤트 이름. category와 message로 식별하고 data_json 필드를 읽는다.
-/// 집계 규칙은 ARMORY 대시보드(armory-dashboard/README.md)와 같다.
+/// 집계 규칙은 GGGG 대시보드(gggg-dashboard/README.md)와 같다.
 /// Unity 콘솔 판매 출력([Customer] 총 판매 …)은 Shop 판매와 중복이므로 Unity 카테고리 전체를 무시한다.
 /// 상점 이벤트는 초기 빌드의 한글 이름(Shop / 총 판매, Workshop / 작업대 진입·퇴장)과
 /// 이후 ShopLogCollector의 eventType 이름(Shop / weapon_sold 등)을 모두 받는다.
@@ -229,7 +229,7 @@ public sealed class GameAnalytics
         {
             Month = month ?? string.Empty,
             ExcludeEditor = excludeEditor,
-            Stages = RaidStages.Select(p => new InsightStage { Scene = p.Scene, Name = p.Name, VaultPenetration = p.Vault }).ToList(),
+            Stages = GameConfig.Stages.Select(p => new InsightStage { Scene = p.Scene, Name = p.Name, VaultPenetration = p.Vault }).ToList(),
         };
         foreach (string version in versions)
         {

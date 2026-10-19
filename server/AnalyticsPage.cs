@@ -6,6 +6,7 @@ namespace LogServer;
 /// 외부 자산 없이 vanilla JS + SVG로 차트를 그리며 /api/analytics를 호출한다. API 키는 GM툴과 같은 localStorage 키를 공유한다.
 /// </summary>
 public static class AnalyticsPage
+// 차트 색 기준: PageCommon.SERIES / var(--series)
 {
     /// <summary>분석 페이지 전체 HTML.</summary>
     public const string Html = """
