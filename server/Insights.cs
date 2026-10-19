@@ -31,6 +31,7 @@ internal sealed class InsightTracker
     private string _saveId = string.Empty;
     private InsightTutorial? _tutorial;
     private (int Day, double Balance)? _closeBalance;
+    private readonly Dictionary<string, double> _saveSeconds = new(StringComparer.Ordinal);
 
     public InsightTracker(InsightDigest digest)
     {
@@ -40,6 +41,12 @@ internal sealed class InsightTracker
     /// <summary>모든 행에서 먼저 부른다. 열린 일시정지를 이 행 시각에서 닫고, 일시정지 행이면 새로 연다.</summary>
     public void Observe(DateTime at, string category, string name)
     {
+        if (_pauseStart == null && _lastAt != default && at > _lastAt)
+        {
+            // 세이브별 플레이 시간(일시정지 제외). 엔딩까지 누적 플레이 시간에 쓴다.
+            _saveSeconds[_saveId] = SaveSeconds() + (at - _lastAt).TotalSeconds;
+        }
+
         _lastAt = at;
         if (_pauseStart is DateTime paused)
         {
@@ -65,6 +72,36 @@ internal sealed class InsightTracker
         if (category == GameEvents.GameCategory && name == GameEvents.Bankrupt && _phase != null)
         {
             _phase.Bankrupt = true;
+        }
+
+        if (category == GameEvents.GameCategory)
+        {
+            switch (name)
+            {
+                case GameEvents.RetireCompleted:
+                    InsightEnding retired = Ending("retire", data);
+                    retired.Balance = Number(data, "balanceBefore");
+                    retired.BalanceAfter = Number(data, "balanceAfter");
+                    retired.Loans = Number(data, "outstandingLoans");
+                    retired.Credits = Number(data, "moduleCredits");
+                    retired.Endless = Bool(data, "endless");
+                    retired.First = Bool(data, "firstEnding");
+                    break;
+
+                case GameEvents.RetireFailed:
+                    InsightEnding failed = Ending("retire_failed", data);
+                    failed.Reason = Text(data, "reason");
+                    failed.Balance = Number(data, "balance");
+                    break;
+
+                case GameEvents.EndingChoice:
+                    InsightEnding choice = Ending("choice", data);
+                    choice.Type = Text(data, "endingType");
+                    choice.Choice = Text(data, "choice");
+                    choice.Panel = Number(data, "panelSeconds");
+                    choice.First = Bool(data, "firstEnding");
+                    break;
+            }
         }
 
         if (category == GameEvents.TutorialCategory)
@@ -105,6 +142,47 @@ internal sealed class InsightTracker
                 _tutorial = null;
                 break;
         }
+    }
+
+    private double SaveSeconds() => _saveSeconds.TryGetValue(_saveId, out double seconds) ? seconds : 0;
+
+    /// <summary>엔딩 기록 하나를 만들어 넣는다. 일차는 이벤트의 day(없거나 음수면 현재 일차), Play는 이 세션의 그 세이브 플레이 시간이다.</summary>
+    private InsightEnding Ending(string kind, JsonElement data)
+    {
+        InsightEnding ending = new()
+        {
+            Kind = kind,
+            Day = Number(data, "day") is double day && day >= 0 ? (int)day : _day,
+            Play = SaveSeconds(),
+            SaveId = _saveId,
+        };
+        _digest.Endings.Add(ending);
+        return ending;
+    }
+
+    /// <summary>NightRaid 엔드 상자 이벤트(스캔·명중·열림). 습격 시작 후 시간(duration)과 상자 조건·탄 수치를 적는다.</summary>
+    private void EndChest(string name, JsonElement data)
+    {
+        string kind = name switch
+        {
+            GameEvents.EndChestScanned => "chest_scanned",
+            GameEvents.EndChestHit => "chest_hit",
+            GameEvents.EndChestOpened => "chest_opened",
+            _ => string.Empty,
+        };
+        if (kind.Length == 0)
+        {
+            return;
+        }
+
+        InsightEnding chest = Ending(kind, data);
+        chest.Day ??= _raid?.Day;
+        chest.Stage = Text(data, "scene");
+        chest.Raid = Number(data, "duration");
+        chest.Gravity = Number(data, kind == "chest_scanned" ? "requiredGravity" : "gravity");
+        chest.Homing = Number(data, kind == "chest_scanned" ? "requiredHoming" : "homing");
+        chest.Scanned = Bool(data, "scanned");
+        chest.Absorb = Number(data, "absorbSeconds");
     }
 
     private InsightTutorial TutorialRun(string sequence)
@@ -302,6 +380,7 @@ internal sealed class InsightTracker
             _raid.Stage = scene;
         }
 
+        EndChest(name, data);
         string enemy = Text(data, "enemyId");
         double? time = Number(data, "time");
         switch (name)
@@ -350,6 +429,7 @@ internal sealed class InsightTracker
         }
 
         _raid.Survived = Bool(data, "survived");
+        _raid.Exit = Text(data, "exitReason");
         if (data.ValueKind == JsonValueKind.Object && data.TryGetProperty("moduleCrateRewards", out JsonElement rewards)
             && rewards.ValueKind == JsonValueKind.Array)
         {
@@ -413,6 +493,7 @@ internal sealed class InsightTracker
             raid.RetriedSameStage = later.Any(r => r.Stage == raid.Stage);
         }
 
+        _digest.SaveSeconds = new Dictionary<string, double>(_saveSeconds, StringComparer.Ordinal);
         _digest.Orders.AddRange(_orders.Values.Where(o => o.Day != null));
         _digest.Days.AddRange(_days.OrderBy(p => p.Key).Select(p => p.Value));
     }
@@ -540,6 +621,10 @@ internal sealed class InsightDigest
     public readonly List<InsightPhase> Phases = new();
     public readonly List<InsightTutorial> Tutorials = new();
     public readonly List<InsightSpin> Spins = new();
+    public readonly List<InsightEnding> Endings = new();
+
+    /// <summary>세이브별 이 세션의 플레이 시간(일시정지 제외, 초).</summary>
+    public Dictionary<string, double> SaveSeconds = new(StringComparer.Ordinal);
 }
 
 /// <summary>
@@ -557,6 +642,7 @@ internal static class InsightPlayers
         Dictionary<(int Player, int Day), InsightDay> days = new();
         Dictionary<int, InsightPhase> lastPhase = new();
         Dictionary<int, InsightTutorial> openTutorial = new();
+        Dictionary<int, double> played = new();
 
         for (int s = 0; s < sessions.Count; s++)
         {
@@ -612,6 +698,22 @@ internal static class InsightPlayers
             v.Raids.AddRange(digest.Raids.Select(r => r.ForSession(Player(r.SaveId))));
             v.Spins.AddRange(digest.Spins.Select(x => x.ForSession(Player(x.SaveId), session)));
             v.ShopSessions += digest.Days.Count > 0 || digest.Phases.Count > 0 ? 1 : 0;
+
+            // 엔딩의 Play = 같은 플레이어의 이전 세션 플레이 시간 합 + 이 세션 안의 시간(세션은 시작 시각 순)
+            foreach (InsightEnding ending in digest.Endings)
+            {
+                int p = Player(ending.SaveId);
+                v.Endings.Add(ending.ForSession(p, played.GetValueOrDefault(p) + ending.Play));
+            }
+
+            // 기록이 있는 플레이어의 시간만 더한다(세이브를 고르기 전 메뉴 시간이 빈 플레이어를 만들지 않게)
+            foreach ((string saveId, double seconds) in digest.SaveSeconds)
+            {
+                if (players.TryGetValue(saveId.Length > 0 ? "save:" + saveId : "session:" + session, out int p))
+                {
+                    played[p] = played.GetValueOrDefault(p) + seconds;
+                }
+            }
 
             foreach (InsightPhase phase in digest.Phases)
             {
@@ -798,9 +900,51 @@ public sealed class InsightVersion
     public List<InsightPhase> Phases { get; set; } = new();
     public List<InsightTutorial> Tutorials { get; set; } = new();
     public List<InsightSpin> Spins { get; set; } = new();
+    public List<InsightEnding> Endings { get; set; } = new();
 
     /// <summary>상점 일차·구간 기록이 있는 세션 수(슬롯머신 이용률의 분모).</summary>
     public int ShopSessions { get; set; }
+}
+
+/// <summary>
+/// 엔딩 관련 이벤트 하나. Kind = retire(Game / retire_completed), retire_failed, choice(ending_choice),
+/// chest_scanned·chest_hit·chest_opened(NightRaid / end_chest_*). Play = 그 세이브의 누적 플레이 시간(이 버전의 세션만, 일시정지 제외, 초).
+/// 엔드 상자의 Gravity·Homing은 스캔이면 요구 수치, 명중이면 맞은 탄의 수치이고 Raid는 습격 시작 후 게임 초다.
+/// </summary>
+public sealed class InsightEnding
+{
+    public int S { get; set; }
+    public string Kind { get; set; } = string.Empty;
+    public int? Day { get; set; }
+    public double Play { get; set; }
+    public string? Type { get; set; }
+    public string? Choice { get; set; }
+    public double? Panel { get; set; }
+    public bool? First { get; set; }
+    public string? Reason { get; set; }
+    public double? Balance { get; set; }
+    public double? BalanceAfter { get; set; }
+    public double? Loans { get; set; }
+    public double? Credits { get; set; }
+    public bool? Endless { get; set; }
+    public string? Stage { get; set; }
+    public double? Raid { get; set; }
+    public double? Gravity { get; set; }
+    public double? Homing { get; set; }
+    public bool? Scanned { get; set; }
+    public double? Absorb { get; set; }
+
+    [System.Text.Json.Serialization.JsonIgnore]
+    internal string SaveId { get; set; } = string.Empty;
+
+    /// <summary>플레이어 번호와 누적 플레이 시간을 붙인 얕은 복사본. 캐시된 세션 기록은 바꾸지 않는다.</summary>
+    internal InsightEnding ForSession(int s, double play)
+    {
+        InsightEnding copy = (InsightEnding)MemberwiseClone();
+        copy.S = s;
+        copy.Play = play;
+        return copy;
+    }
 }
 
 /// <summary>
@@ -1028,6 +1172,9 @@ public sealed class InsightRaid
     /// <summary>습격 시작에 기록된 총의 관통·폭발 수치(총구 중 최댓값, 방사 절반 반영). 이후 빌드부터.</summary>
     public double? Penetration { get; set; }
     public double? Explosion { get; set; }
+
+    /// <summary>습격 종료의 exitReason(extracted, died, ending_quit = 엔드 상자 END 화면에서 그만하기). 이전 빌드는 빈 문자열.</summary>
+    public string Exit { get; set; } = string.Empty;
 
     /// <summary>습격 종료의 moduleCrateRewards(그 습격에서 모듈 상자로 얻은 모듈 ID). 종료 기록이 없으면 null.</summary>
     public List<int>? Rewards { get; set; }

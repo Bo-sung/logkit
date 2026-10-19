@@ -217,3 +217,6 @@ saveId가 없는 이전 로그는 세션이다. 일차는 상점 이벤트의 `d
 다음 날 영업 시작 잔액(선택)이다. 모듈 보유 개수는 기본 해금 12종 + 그 구간까지 습격 종료 `moduleCrateRewards`로 얻은 잠긴 모듈(ID 10~16) 종류 수다. 손님 이름표(`Insights.cs` `CustomerNames`)는 게임 `CustomerOrderData.json` 기준이다.
 슬롯머신 카드는 `Shop / slot_machine_spin_started`(결제 성공 때 1회)로 세션당 회전 수, 플레이어별 환급률(당첨금 ÷ 지출)·순이득, 일차별 이용률,
 확률표(`oddsPool`)별 실제 환급률과 게임 가중치로 계산한 이론 환급률, 당첨 심볼 분포, 회전 직전 잔액을 그린다. 당첨금은 지급 예정 금액(`plannedPrize`)이다.
+엔딩 카드는 `Game / retire_completed·retire_failed·ending_choice`와 `NightRaid / end_chest_scanned·end_chest_hit·end_chest_opened`, 습격 결과의 `exitReason`으로
+엔딩 도달률·n일차까지 누적 도달률·첫 엔딩까지 누적 플레이 시간(같은 세이브의 세션 시간 합, 일시정지 제외)·엔드 상자 퍼널·엔딩 화면 선택과 대기 시간·은퇴 시점 자금·
+상자 조건 대비 명중 탄 수치·상자 소요 시간·습격 종료 사유를 그린다. `습격 엔딩 종료`는 습격 종료로 세며 survived 값을 따른다.

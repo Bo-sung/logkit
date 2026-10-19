@@ -242,6 +242,78 @@ public static class InsightsPage
     <div id="c-modules" class="cells"></div>
   </section>
 
+  <div class="section">엔딩</div>
+
+  <section class="card wide">
+    <h3>엔딩 요약</h3>
+    <p class="sub">은퇴 = Game / retire_completed($100,000 결제), 엔드 상자 = NightRaid / end_chest_opened · 플레이어 = 세이브 ·
+      첫 엔딩 = 플레이어가 먼저 본 엔딩 · 계속하기 = 엔딩 화면에서 continue를 고른 비율 · 은퇴 재시도 = 같은 세이브에 은퇴가 2번 이상(은퇴 직전 자동저장을 불러와 다시 함) ·
+      엔딩 로그를 넣은 빌드부터 쌓입니다</p>
+    <div id="t-ending"></div>
+  </section>
+
+  <section class="card">
+    <div class="row" style="justify-content:space-between">
+      <h3>n일차까지 엔딩을 본 플레이어 비율<span class="unitsw" data-unit="endreach"></span></h3>
+      <select id="endtype">
+        <option value="any">엔딩 아무거나</option>
+        <option value="retire">은퇴</option>
+        <option value="end_chest">엔드 상자</option>
+      </select>
+    </div>
+    <p class="sub">그 일차까지 엔딩을 본 플레이어 / 그 일차(낮·밤 구간 또는 상점 기록)에 도달한 플레이어</p>
+    <div id="c-endreach" class="chart"></div>
+  </section>
+
+  <section class="card">
+    <h3>첫 엔딩까지 누적 플레이 시간</h3>
+    <p class="sub">플레이어가 그 엔딩을 처음 본 시점까지의 플레이 시간(같은 세이브의 이전 세션 합 + 그 세션 안, 일시정지 제외) ·
+      같은 버전의 세션만 합칩니다 · 플레이어 1명 = 1</p>
+    <div id="c-endtime" class="chart"></div>
+  </section>
+
+  <section class="card">
+    <h3>엔드 상자 퍼널<span class="unitsw" data-unit="endfunnel"></span></h3>
+    <p class="sub">습격을 한 번이라도 한 플레이어 중 각 단계에 도달한 플레이어 · 스캔 = 조건 확인, 명중 = 조건을 채운 탄이 코어에 맞음,
+      열림 = END 화면 시작 · 단계마다 습격당 최대 1회 기록</p>
+    <div id="c-endfunnel" class="chart"></div>
+  </section>
+
+  <section class="card">
+    <h3>엔딩 화면 선택<span class="unitsw" data-unit="endchoice"></span></h3>
+    <p class="sub">Game / ending_choice · 비율 = 그 엔딩 화면에서 고른 버튼 / 그 엔딩 화면 선택 수</p>
+    <div id="c-endchoice" class="chart"></div>
+    <div class="subhead">버튼을 누르기까지 걸린 시간</div>
+    <p class="sub">panelSeconds(실시간) · 은퇴는 패널이 열린 때, 엔드 상자는 END 버튼이 다 나타난 때부터</p>
+    <div id="c-endpanel" class="chart"></div>
+  </section>
+
+  <section class="card">
+    <h3>은퇴 시점 자금</h3>
+    <p class="sub">retire_completed 1회 = 1 · 결제 전·후 잔액(은퇴 비용 $100,000)과 남은 대출(outstandingLoans)</p>
+    <div id="c-retirestate" class="chart"></div>
+  </section>
+
+  <section class="card">
+    <h3>엔드 상자 조건과 명중 탄 수치</h3>
+    <p class="sub">요구 = 스캔 때 확인한 상자 조건(requiredGravity·requiredHoming), 명중 = 조건을 채운 탄의 중력·유도 수치 · 기록 1개 = 1 ·
+      명중 탄이 요구보다 크게 높으면 조건이 쉽거나 이미 강한 총으로 왔다는 뜻</p>
+    <div id="c-chestnum" class="chart"></div>
+  </section>
+
+  <section class="card">
+    <h3>엔드 상자 소요 시간</h3>
+    <p class="sub">습격 시작 후 게임 초(duration) · 스캔→명중은 같은 플레이어·같은 일차의 스캔과 명중 차 · 흡수 = 명중→열림(absorbSeconds)</p>
+    <div id="c-chesttime" class="chart"></div>
+  </section>
+
+  <section class="card">
+    <h3>습격 종료 사유<span class="unitsw" data-unit="exit"></span></h3>
+    <p class="sub">습격 결과 로그의 exitReason · 엔딩 종료 = END 화면에서 그만하기로 로비에 감(보상 미확정, 성공으로 셈) ·
+      exitReason이 없는 이전 로그는 뺌</p>
+    <div id="c-exit" class="chart"></div>
+  </section>
+
   <div class="section">슬롯머신</div>
 
   <section class="card wide">
@@ -326,6 +398,10 @@ public static class InsightsPage
 성공       습격 종료 이벤트의 survived
 재도전     실패(survived = false)한 습격 뒤 같은 플레이어의 습격이 더 있음. 그 뒤 기록이 없으면 재도전 안 함으로 셈
 대응 시간  같은 습격의 적 발견 → 적 처치(enemyId, time). 발견 없이 처치된 적은 뺌
+은퇴       Game / retire_completed(결제 직후, 세이브의 첫 은퇴만 — 같은 세이브에 여러 번이면 자동저장을 불러와 재시도), retire_failed(reason)
+엔드 상자  NightRaid / end_chest_scanned·end_chest_hit·end_chest_opened(습격당 각 1회). 엔딩 선택 = Game / ending_choice
+누적 시간  같은 세이브의 세션별 플레이 시간(행 사이 시간 − 일시정지)을 세션 시작 순으로 더함. 버전이 바뀌면 새로 셈
+종료 사유  습격 결과(습격 탈출 성공·습격 사망·습격 엔딩 종료)의 exitReason
 슬롯머신   Shop / slot_machine_spin_started(레버를 당겨 결제가 성공한 순간 1회). 당첨금은 plannedPrize(지급 예정)이며
            회전 중 오브젝트가 꺼지면 실제 지급이 안 될 수 있음. 이론 환급률 = 게임 SlotMachineReels 가중치
            (꽝 709 / 저 200 / 중 70 / 폭발 20 / 방사 1, 처음 3회 저·중 ×5, 마지막 판 저·중·폭발 ×5)
@@ -860,6 +936,126 @@ function renderPenExp() {
   }, "관통 모듈 수", "");
 }
 
+// ─── 엔딩 ───
+const ENDING_TYPES = [["retire", "은퇴"], ["end_chest", "엔드 상자"]];
+const ENDING_KIND = { retire: "retire", end_chest: "chest_opened" };
+/** 플레이어별 처음 본 엔딩 기록. type = retire·end_chest·any → Map(s → 기록). */
+function firstEndings(v, type) {
+  const kinds = type === "any" ? Object.values(ENDING_KIND) : [ENDING_KIND[type]];
+  const first = new Map();
+  v.endings.filter((e) => kinds.includes(e.kind)).forEach((e) => {
+    const f = first.get(e.s);
+    if (!f || e.play < f.play) first.set(e.s, e);
+  });
+  return first;
+}
+
+function renderEnding(vs) {
+  const evs = vs.filter((v) => v.endings && v.endings.length);
+  const ids = ["c-endreach", "c-endtime", "c-endfunnel", "c-endchoice", "c-endpanel", "c-retirestate", "c-chestnum", "c-chesttime", "c-exit"];
+  if (!evs.length) {
+    $("t-ending").innerHTML = emptyBox("엔딩 기록이 없습니다. 은퇴·엔드 상자 로그(retire_completed, end_chest_*, ending_choice)를 넣은 빌드부터 쌓입니다.");
+    ids.forEach((id) => { $(id).innerHTML = ""; });
+    return;
+  }
+  const of = (v, kind) => v.endings.filter((e) => e.kind === kind);
+  const players = (list) => new Set(list.map((e) => e.s));
+
+  // 요약 표
+  let rows = "";
+  evs.forEach((v) => {
+    const retire = players(of(v, "retire")), chest = players(of(v, "chest_opened"));
+    const any = new Set([...retire, ...chest]), both = [...retire].filter((s) => chest.has(s)).length;
+    const first = [...firstEndings(v, "any").values()], firstRetire = first.filter((e) => e.kind === "retire").length;
+    const choices = of(v, "choice"), cont = choices.filter((e) => e.choice === "continue").length;
+    const retries = [...groupMap(of(v, "retire"), (e) => e.s).values()].filter((l) => l.length > 1).length;
+    const failed = of(v, "retire_failed"), reasons = [...groupMap(failed, (e) => e.reason || "(없음)").entries()].map(([k, l]) => k + " " + l.length).join(", ");
+    const endless = of(v, "retire").filter((e) => e.endless).length;
+    const share = (n, total, unit) => n + (unit || "") + ' <span class="muted">' + pct(ratio(n, total), 0) + "</span>";
+    rows += "<tr><td>" + esc(v.version) + "</td><td>" + v.players + "명</td><td>" + share(any.size, v.players, "명") + "</td><td>" +
+      share(retire.size, v.players, "명") + "</td><td>" + share(chest.size, v.players, "명") + "</td><td>" + both + "명</td><td>" +
+      (first.length ? firstRetire + " : " + (first.length - firstRetire) : "–") + "</td><td>" + share(endless, of(v, "retire").length, "회") +
+      "</td><td>" + (choices.length ? share(cont, choices.length, "회") : "–") + "</td><td>" + retries + "명</td><td>" + failed.length + "회" +
+      (reasons ? ' <span class="muted">' + esc(reasons) + "</span>" : "") + "</td></tr>";
+  });
+  $("t-ending").innerHTML = '<div class="tablewrap"><table><tr><th>버전</th><th>플레이어</th><th>엔딩 도달</th><th>은퇴</th><th>엔드 상자</th>' +
+    "<th>둘 다</th><th>첫 엔딩 은퇴 : 상자</th><th>무한 모드 은퇴</th><th>엔딩 후 계속하기</th><th>은퇴 재시도</th><th>은퇴 실패</th></tr>" + rows + "</table></div>";
+
+  // n일차까지 엔딩을 본 플레이어 비율
+  const type = $("endtype").value, count = isCount("endreach");
+  const reachDays = daysOf(evs, (v) => v.phases.concat(v.days));
+  dayLines($("c-endreach"), evs, reachDays, (v) => {
+    const lastDay = new Map();
+    v.phases.concat(v.days).forEach((x) => lastDay.set(x.s, Math.max(lastDay.get(x.s) ?? -1, x.day)));
+    const first = firstEndings(v, type);
+    return reachDays.map((day) => {
+      const reached = [...lastDay.entries()].filter(([, last]) => last >= day).map(([s]) => s);
+      const hits = reached.filter((s) => first.has(s) && first.get(s).day != null && first.get(s).day <= day).length;
+      return { x: day, y: reached.length ? (count ? hits : hits / reached.length) : null, hits, n: reached.length };
+    });
+  }, (v, p) => v.version + " · " + dayLabel(p.x) + "\n엔딩 " + pct(p.hits / p.n) + " (" + p.hits + " / " + p.n + "명)", count);
+
+  // 첫 엔딩까지 누적 플레이 시간(분)
+  boxV($("c-endtime"), evs, ENDING_TYPES.map(([k]) => k), (v, k) => [...firstEndings(v, k).values()].map((e) => e.play / 60),
+    (x) => num(x, 0) + "분", (k) => ENDING_TYPES.find(([t]) => t === k)[1]);
+
+  // 엔드 상자 퍼널
+  const FUNNEL = [["chest_scanned", "상자 스캔"], ["chest_hit", "조건 탄 명중"], ["chest_opened", "상자 열림"]];
+  const funnelKeys = FUNNEL.map(([, n]) => n).concat(["END 화면에서 로비로"]);
+  hbars($("c-endfunnel"), evs, funnelKeys, (v, key) => {
+    const raiders = players(v.raids).size;
+    if (!raiders) return null;
+    const i = funnelKeys.indexOf(key);
+    const n = i < FUNNEL.length ? players(of(v, FUNNEL[i][0])).size
+      : players(of(v, "choice").filter((e) => e.type === "end_chest" && e.choice === "lobby")).size;
+    return shareBar("endfunnel", n, raiders, "명");
+  }, isCount("endfunnel") ? 0 : 1, false, 140);
+
+  // 엔딩 화면 선택
+  const CHOICES = [["lobby", "로비로"], ["continue", "계속하기"]];
+  const choiceKeys = ENDING_TYPES.flatMap(([, tn]) => CHOICES.map(([, cn]) => tn + " → " + cn));
+  hbars($("c-endchoice"), evs, choiceKeys, (v, key) => {
+    const i = choiceKeys.indexOf(key), t = ENDING_TYPES[Math.floor(i / 2)][0], c = CHOICES[i % 2][0];
+    const list = of(v, "choice").filter((e) => e.type === t);
+    return list.length ? shareBar("endchoice", list.filter((e) => e.choice === c).length, list.length, "회") : null;
+  }, isCount("endchoice") ? 0 : 1, false, 140);
+  boxH($("c-endpanel"), evs, choiceKeys, (v, key) => {
+    const i = choiceKeys.indexOf(key), t = ENDING_TYPES[Math.floor(i / 2)][0], c = CHOICES[i % 2][0];
+    return of(v, "choice").filter((e) => e.type === t && e.choice === c && e.panel != null).map((e) => e.panel);
+  }, (x) => num(x, 1) + "초");
+
+  // 은퇴 시점 자금
+  const RETIRE_FIELDS = [["balance", "결제 전 잔액"], ["balanceAfter", "결제 후 잔액"], ["loans", "남은 대출"]];
+  boxV($("c-retirestate"), evs, RETIRE_FIELDS.map(([k]) => k), (v, k) => of(v, "retire").filter((e) => e[k] != null).map((e) => e[k]),
+    money, (k) => RETIRE_FIELDS.find(([f]) => f === k)[1]);
+
+  // 엔드 상자 조건과 명중 탄 수치
+  const NUMS = [["chest_scanned", "gravity", "요구 중력"], ["chest_hit", "gravity", "명중 탄 중력"],
+    ["chest_scanned", "homing", "요구 유도"], ["chest_hit", "homing", "명중 탄 유도"]];
+  boxV($("c-chestnum"), evs, NUMS.map((_, i) => i), (v, i) => of(v, NUMS[i][0]).filter((e) => e[NUMS[i][1]] != null).map((e) => e[NUMS[i][1]]),
+    (x) => num(x, 1), (i) => NUMS[i][2]);
+
+  // 엔드 상자 소요 시간
+  const TIMES = ["습격 시작→스캔", "스캔→명중", "습격 시작→명중", "흡수(명중→열림)"];
+  boxV($("c-chesttime"), evs, TIMES.map((_, i) => i), (v, i) => {
+    if (i === 0) return of(v, "chest_scanned").filter((e) => e.raid != null).map((e) => e.raid);
+    if (i === 2) return of(v, "chest_hit").filter((e) => e.raid != null).map((e) => e.raid);
+    if (i === 3) return of(v, "chest_opened").filter((e) => e.absorb != null).map((e) => e.absorb);
+    const scans = new Map(of(v, "chest_scanned").map((e) => [e.s + ":" + e.day, e.raid]));
+    return of(v, "chest_hit").filter((e) => e.raid != null && scans.get(e.s + ":" + e.day) != null)
+      .map((e) => e.raid - scans.get(e.s + ":" + e.day)).filter((x) => x >= 0);
+  }, (x) => num(x, 0) + "초", (i) => TIMES[i]);
+
+  // 습격 종료 사유
+  const EXITS = [["extracted", "탈출 성공"], ["died", "사망"], ["ending_quit", "엔딩 종료"]];
+  hbars($("c-exit"), evs, EXITS.map(([, n]) => n), (v, key) => {
+    const list = v.raids.filter((r) => r.exit);
+    if (!list.length) return null;
+    const id = EXITS.find(([, n]) => n === key)[0];
+    return shareBar("exit", list.filter((r) => r.exit === id).length, list.length, "회");
+  }, isCount("exit") ? 0 : 1, false, 110);
+}
+
 // ─── 슬롯머신 ───
 // 게임 SlotMachineReels.ChooseResult의 가중치. 저 = 기본·연장($1,000), 중 = 연사·관통($2,000), 폭발 $5,000, 방사 $50,000
 const SLOT_POOLS = [["first_three", "처음 3회"], ["last_funds", "마지막 판"], ["ordinary", "일반"]];
@@ -1101,6 +1297,7 @@ function render() {
   renderPenExp();
   renderGeneral(vs);
   renderModules();
+  renderEnding(vs);
   renderSlot(vs);
 }
 
@@ -1116,7 +1313,7 @@ document.querySelectorAll("#rule input").forEach((inp) => {
 $("withended").checked = !!loadPrefs().withended;
 $("withended").onchange = () => { savePrefs({ withended: $("withended").checked }); renderPhase(); };
 $("tutseq").onchange = () => { savePrefs({ tutseq: $("tutseq").value }); renderTutorial(selectedVersions()); };
-for (const id of ["modmetric", "retrymode", "revmode", "nightmode", "vaultmetric", "balmode", "endsource"]) {
+for (const id of ["modmetric", "retrymode", "revmode", "nightmode", "vaultmetric", "balmode", "endsource", "endtype"]) {
   const saved = loadPrefs()[id];
   if (saved && [...$(id).options].some((o) => o.value === saved)) $(id).value = saved;
   $(id).onchange = () => { savePrefs({ [id]: $(id).value }); render(); };

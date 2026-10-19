@@ -38,6 +38,9 @@ internal static class GameEvents
     public const string GameCategory = "Game";
     public const string Pause = "일시정지";                   // 일시정지 해제 또는 다음 이벤트까지를 정지 시간으로 본다
     public const string Bankrupt = "bankrupt";                // day, balance, rent — 정산 때 자리세를 못 낸 순간
+    public const string RetireCompleted = "retire_completed"; // day, balanceBefore, balanceAfter, outstandingLoans, moduleCredits, endless, firstEnding
+    public const string RetireFailed = "retire_failed";       // day, reason, balance
+    public const string EndingChoice = "ending_choice";       // endingType(retire/end_chest), choice(lobby/continue), panelSeconds, day, firstEnding
     public const string SystemCategory = "System";           // 씬 시작·새 게임 시작·저장 게임 시작(...)에 installId, saveId
 
     public const string TutorialCategory = "Tutorial";
@@ -54,7 +57,10 @@ internal static class GameEvents
     public const string EnemyKilled = "적 처치";              // time, enemyId
 
     // 종료 이벤트: scene, survived, time, duration, moduleCrateRewards[], moduleCrateCredits, materialCrateCredits, enemyKills, health
-    public static readonly string[] RaidEnds = { "습격 사망", "습격 탈출 성공", "탈출 성공", "습격 성공" };
+    public static readonly string[] RaidEnds = { "습격 사망", "습격 탈출 성공", "탈출 성공", "습격 성공", "습격 엔딩 종료" };
+    public const string EndChestScanned = "end_chest_scanned"; // scene, day, duration, requiredGravity, requiredHoming
+    public const string EndChestHit = "end_chest_hit";         // scene, day, duration, gravity, homing, scanned
+    public const string EndChestOpened = "end_chest_opened";   // scene, day, duration, absorbSeconds
 }
 
 /// <summary>
