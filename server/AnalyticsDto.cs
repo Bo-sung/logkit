@@ -1,6 +1,57 @@
 namespace LogServer;
 
 /// <summary>GET /api/analytics 응답 본문. 범위 안의 모든 세션 로그를 앱 버전별로 누적 집계한 플레이 통계다.</summary>
+/// <summary>GET /api/analytics/replay 응답 본문. 버전·스테이지 목록과 고른 버전·스테이지의 습격 궤적.</summary>
+public sealed class ReplayResponse
+{
+    public string Month { get; set; } = string.Empty;
+    public bool ExcludeEditor { get; set; }
+
+    /// <summary>궤적이 있는 버전(최신부터)과 스테이지별 습격 수.</summary>
+    public List<ReplayVersion> Versions { get; set; } = new();
+
+    /// <summary>실제로 담은 버전·스테이지. 궤적이 하나도 없으면 빈 문자열.</summary>
+    public string Version { get; set; } = string.Empty;
+    public string Stage { get; set; } = string.Empty;
+
+    /// <summary>최근 습격부터의 궤적 목록.</summary>
+    public List<ReplayRaid> Raids { get; set; } = new();
+
+    /// <summary>습격이 많아 최근 300개까지만 담았으면 true.</summary>
+    public bool Truncated { get; set; }
+}
+
+public sealed class ReplayVersion
+{
+    public string Version { get; set; } = string.Empty;
+    public List<ReplayStage> Stages { get; set; } = new();
+}
+
+public sealed class ReplayStage
+{
+    public string Scene { get; set; } = string.Empty;
+    public int Raids { get; set; }
+}
+
+/// <summary>
+/// 습격 하나의 궤적. Track = [시각, x, z, 시선(cameraRotation.y, 도), 체력] 반복(0.2초 간격, 시각은 습격 씬의 게임 초),
+/// Shots·Hits = [시각, x, z] 반복(weapon_fired·player_hit), Kills = 적 처치 시각. Index는 세션 안에서 몇 번째 습격인지다.
+/// </summary>
+public sealed class ReplayRaid
+{
+    public string SessionId { get; set; } = string.Empty;
+    public string DateUtc { get; set; } = string.Empty;
+    public int Index { get; set; }
+    public int? Day { get; set; }
+    public bool? Survived { get; set; }
+    public string Exit { get; set; } = string.Empty;
+    public double? Duration { get; set; }
+    public List<float> Track { get; set; } = new();
+    public List<float> Shots { get; set; } = new();
+    public List<float> Hits { get; set; } = new();
+    public List<float> Kills { get; set; } = new();
+}
+
 public sealed class AnalyticsResponse
 {
     /// <summary>조회한 월(yyyy-MM). 빈 문자열이면 전체 월.</summary>

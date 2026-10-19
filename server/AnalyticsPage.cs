@@ -28,6 +28,7 @@ public static class AnalyticsPage
     <b>버전 통계</b>
     <a href="/weapons">총기 통계</a>
     <a href="/insights">가설 통계</a>
+    <a href="/replay">습격 리플레이</a>
   </nav>
   <div id="status" class="status"></div>
   <span class="spacer"></span>

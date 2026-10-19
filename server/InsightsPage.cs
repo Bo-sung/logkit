@@ -41,6 +41,7 @@ public static class InsightsPage
     <a href="/analytics">버전 통계</a>
     <a href="/weapons">총기 통계</a>
     <b>가설 통계</b>
+    <a href="/replay">습격 리플레이</a>
   </nav>
   <div id="status" class="status"></div>
   <span class="spacer"></span>

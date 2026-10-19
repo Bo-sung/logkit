@@ -55,6 +55,7 @@ internal static class GameEvents
     public const string EnemySpawn = "적 생성";               // time, enemyId
     public const string EnemySpotted = "적 발견";             // time, enemyId
     public const string EnemyKilled = "적 처치";              // time, enemyId
+    public const string PlayerHit = "player_hit";             // time, position, damage, health, enemyType
 
     // 종료 이벤트: scene, survived, time, duration, moduleCrateRewards[], moduleCrateCredits, materialCrateCredits, enemyKills, health
     public static readonly string[] RaidEnds = { "습격 사망", "습격 탈출 성공", "탈출 성공", "습격 성공", "습격 엔딩 종료" };
@@ -76,6 +77,10 @@ public sealed class GameAnalytics
     private const int MAX_TIMELINE_BINS = 720;
     private const int HEATMAP_GRID = 64;
     private const int TOP_LIST_SIZE = 15;
+    private const int MAX_REPLAY_RAIDS = 300;
+
+    /// <summary>리플레이 궤적 표본 간격(게임 초). 플레이어 상태는 초당 50회라 그대로 보내면 너무 크다.</summary>
+    private const double REPLAY_STEP_SECONDS = 0.2;
     private const string UNKNOWN = "(미기록)";
 
     private readonly CsvSessionStore _store;
@@ -137,6 +142,78 @@ public sealed class GameAnalytics
     /// 범위 안 세션의 가설·일반 통계 기록을 버전별로 모은다. 집계(분포·비율)는 화면이 한다.
     /// month(yyyy-MM, 비면 전체 월)와 excludeEditor를 사용하며, 버전 오름차순 기록 응답을 반환한다.
     /// </summary>
+    /// <summary>
+    /// 고스트 리플레이 응답. 버전·스테이지별 습격 수 목록과, 고른 버전·스테이지(없으면 최신 버전의 습격이 가장 많은 스테이지)의
+    /// 습격 궤적을 돌려준다. 궤적은 세션 요약의 0.2초 간격 표본이며 최근 습격부터 MAX_REPLAY_RAIDS개까지만 담는다.
+    /// </summary>
+    public ReplayResponse BuildReplay(string? month, bool excludeEditor, string? version, string? stage)
+    {
+        Dictionary<string, List<(SessionRow Row, SessionDigest Digest)>> byVersion = GroupByVersion(month, excludeEditor);
+        List<string> versions = byVersion.Keys.ToList();
+        versions.Sort((a, b) => CompareVersions(b, a));
+        ReplayResponse response = new() { Month = month ?? string.Empty, ExcludeEditor = excludeEditor };
+        foreach (string v in versions)
+        {
+            List<ReplayStage> stages = byVersion[v].SelectMany(x => x.Digest.Raids)
+                .Where(r => r.Track.Count > 0)
+                .GroupBy(r => r.Scene.Length > 0 ? r.Scene : UNKNOWN)
+                .Select(g => new ReplayStage { Scene = g.Key, Raids = g.Count() })
+                .OrderByDescending(s => s.Raids).ThenBy(s => s.Scene, StringComparer.Ordinal)
+                .ToList();
+            if (stages.Count > 0)
+            {
+                response.Versions.Add(new ReplayVersion { Version = v, Stages = stages });
+            }
+        }
+
+        ReplayVersion? chosen = response.Versions.Find(x => x.Version == version) ?? response.Versions.FirstOrDefault();
+        if (chosen == null)
+        {
+            return response;
+        }
+
+        string scene = chosen.Stages.Exists(s => s.Scene == stage) ? stage! : chosen.Stages[0].Scene;
+        response.Version = chosen.Version;
+        response.Stage = scene;
+        List<(SessionRow Row, SessionDigest Digest)> sessions = byVersion[chosen.Version];
+        sessions.Sort((a, b) => string.CompareOrdinal(b.Row.DateUtc, a.Row.DateUtc));
+        foreach ((SessionRow row, SessionDigest digest) in sessions)
+        {
+            int index = 0;
+            foreach (RaidDigest raid in digest.Raids)
+            {
+                index++;
+                if (raid.Track.Count == 0 || (raid.Scene.Length > 0 ? raid.Scene : UNKNOWN) != scene)
+                {
+                    continue;
+                }
+
+                if (response.Raids.Count >= MAX_REPLAY_RAIDS)
+                {
+                    response.Truncated = true;
+                    break;
+                }
+
+                response.Raids.Add(new ReplayRaid
+                {
+                    SessionId = row.SessionId,
+                    DateUtc = row.DateUtc,
+                    Index = index,
+                    Day = raid.Day,
+                    Survived = raid.Survived,
+                    Exit = raid.Exit,
+                    Duration = raid.Duration,
+                    Track = raid.Track,
+                    Shots = raid.ShotTrack,
+                    Hits = raid.HitTrack,
+                    Kills = raid.KillTimes,
+                });
+            }
+        }
+
+        return response;
+    }
+
     public InsightsResponse BuildInsights(string? month, bool excludeEditor)
     {
         Dictionary<string, List<(SessionRow Row, SessionDigest Digest)>> byVersion = GroupByVersion(month, excludeEditor);
@@ -427,6 +504,7 @@ public sealed class GameAnalytics
                     raid.Ended = true;
                     raid.Survived = TryGet(data, "survived", out JsonElement survived) ? survived.ValueKind == JsonValueKind.True : null;
                     raid.Duration = ReadDouble(data, "duration");
+                    raid.Exit = ReadString(data, "exitReason");
                     raid.EnemyKills = ReadDouble(data, "enemyKills");
                     raid.EndHealth = ReadDouble(data, "health");
                     raid.ModuleCrateCredits = ReadDouble(data, "moduleCrateCredits");
@@ -493,6 +571,13 @@ public sealed class GameAnalytics
                 raid.States++;
                 raid.Points.Add((float)x);
                 raid.Points.Add((float)z);
+                if (time - raid.LastTrackTime >= REPLAY_STEP_SECONDS)
+                {
+                    // 리플레이 궤적: 시각, x, z, 시선 방향(cameraRotation.y, 도), 체력
+                    raid.LastTrackTime = time;
+                    double yaw = TryGet(data, "cameraRotation", out JsonElement rotation) ? ReadDouble(rotation, "y") ?? 0 : 0;
+                    raid.Track.AddRange(new[] { Round(time), Round(x), Round(z), (float)Math.Round(yaw), Round(ReadDouble(data, "health") ?? 0) });
+                }
                 int bin = (int)(time / TimelineBinSeconds);
                 if (bin >= 0 && bin < MAX_TIMELINE_BINS)
                 {
@@ -525,9 +610,26 @@ public sealed class GameAnalytics
 
             case GameEvents.EnemyKilled:
                 raid.EnemiesKilled++;
+                if (ReadDouble(data, "time") is double killedAt)
+                {
+                    raid.KillTimes.Add(Round(killedAt));
+                }
+
+                break;
+
+            case GameEvents.WeaponFired:
+            case GameEvents.PlayerHit:
+                if (ReadDouble(data, "time") is double eventAt && TryGet(data, "position", out JsonElement at)
+                    && ReadDouble(at, "x") is double ex && ReadDouble(at, "z") is double ez)
+                {
+                    (name == GameEvents.WeaponFired ? raid.ShotTrack : raid.HitTrack).AddRange(new[] { Round(eventAt), Round(ex), Round(ez) });
+                }
+
                 break;
         }
     }
+
+    private static float Round(double value) => (float)Math.Round(value, 2);
 
     /// <summary>
     /// 스테이지(습격 씬)별 위치 범위를 전 버전 공통으로 구한다. 버전 간 히트맵을 같은 좌표로 비교하기 위함이다.
@@ -1348,6 +1450,14 @@ internal sealed class RaidDigest
     public int EnemiesKilled;
     public readonly List<float> Points = new();
     public readonly Dictionary<int, TimelineAccumulator> Timeline = new();
+
+    // 고스트 리플레이 — Track은 [시각, x, z, 시선(도), 체력] 0.2초 간격, ShotTrack·HitTrack은 [시각, x, z], KillTimes는 적 처치 시각
+    public string Exit = string.Empty;
+    public double LastTrackTime = double.NegativeInfinity;
+    public readonly List<float> Track = new();
+    public readonly List<float> ShotTrack = new();
+    public readonly List<float> HitTrack = new();
+    public readonly List<float> KillTimes = new();
 
     // 총기 — 습격 시작의 휴대 총, 습격 중 구성 교체, 실제 발사(구성 ID별 수와 x·z 위치)
     public bool HasLoadout;

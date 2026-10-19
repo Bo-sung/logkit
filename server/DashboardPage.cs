@@ -94,6 +94,7 @@ nav.pages b { color: var(--text); font-weight: 600; }
     <a href="/analytics">버전 통계</a>
     <a href="/weapons">총기 통계</a>
     <a href="/insights">가설 통계</a>
+    <a href="/replay">습격 리플레이</a>
   </nav>
   <div id="status" class="status">API 키를 입력하고 연결하세요.</div>
   <span class="spacer"></span>
