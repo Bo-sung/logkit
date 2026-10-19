@@ -92,6 +92,7 @@ tr.group td { background: #1c2128; color: var(--muted); font-size: 11.5px; lette
 .missing div { border: 1px dashed var(--border); border-radius: 6px; padding: 8px 10px; color: var(--muted); font-size: 12px; }
 .missing b { color: var(--text); display: block; font-weight: 600; }
 details summary { cursor: pointer; color: var(--muted); }
+.snapbadge { font-size: 12px; color: #e3b341; border: 1px solid #9e6a03; border-radius: 12px; padding: 1px 10px; }
 .unitsw { display: inline-flex; margin-left: 10px; vertical-align: middle; border: 1px solid var(--border); border-radius: 6px;
   overflow: hidden; font-weight: 400; }
 .unitsw button { border: 0; border-radius: 0; padding: 1px 8px; font-size: 11px; color: var(--muted); background: transparent; }
@@ -118,8 +119,67 @@ function esc(s) {
 }
 function getKey() { try { return localStorage.getItem(KEY_STORE) || ""; } catch (_) { return ""; } }
 function setKey(k) { try { localStorage.setItem(KEY_STORE, k); } catch (_) {} }
-function loadPrefs() { try { return JSON.parse(localStorage.getItem(PREF_STORE) || "{}"); } catch (_) { return {}; } }
-function savePrefs(p) { try { localStorage.setItem(PREF_STORE, JSON.stringify(Object.assign(loadPrefs(), p))); } catch (_) {} }
+// HTML 저장본이면 페이지에 넣어 둔 데이터(window.LOGKIT_SNAPSHOT)로 그리고, 화면 설정은 저장본 안에서만 바꾼다
+const SNAP = window.LOGKIT_SNAPSHOT || null;
+function loadPrefs() {
+  if (SNAP) return SNAP.prefs || (SNAP.prefs = {});
+  try { return JSON.parse(localStorage.getItem(PREF_STORE) || "{}"); } catch (_) { return {}; }
+}
+function savePrefs(p) {
+  if (SNAP) { Object.assign(loadPrefs(), p); return; }
+  try { localStorage.setItem(PREF_STORE, JSON.stringify(Object.assign(loadPrefs(), p))); } catch (_) {}
+}
+
+/**
+ * 지금 불러온 데이터를 넣은 단독 HTML을 내려받는다. 페이지 원본(서버의 같은 경로)에 데이터·선택 버전·화면 설정을 스크립트로 끼워 넣으므로
+ * 저장본은 서버 없이 열리고 차트·탭·필터·툴팁을 그대로 쓸 수 있다.
+ */
+async function exportSnapshot() {
+  if (!state.data) { setStatus("먼저 데이터를 불러오세요.", true); return; }
+  const status = $("status").textContent;
+  setStatus("HTML 만드는 중…");
+  try {
+    const page = await (await fetch(location.pathname)).text();
+    const snap = { page: location.pathname, origin: location.origin, savedAt: new Date().toISOString(), status,
+      data: state.data, selected: state.selected, colorOf: state.colorOf, prefs: loadPrefs() };
+    // 데이터 안의 닫는 스크립트 태그가 저장본의 스크립트를 끊지 않게 < 를 이스케이프한다(페이지 안에도 그 태그를 그대로 쓰지 않는다)
+    const json = JSON.stringify(snap).replace(/</g, "\\u003c");
+    const at = page.indexOf("<script>");
+    const html = page.slice(0, at) + "<script>window.LOGKIT_SNAPSHOT = " + json + ";<" + "/script>\n" + page.slice(at);
+    const now = new Date(), pad = (n) => String(n).padStart(2, "0");
+    const stamp = now.getFullYear() + pad(now.getMonth() + 1) + pad(now.getDate()) + "-" + pad(now.getHours()) + pad(now.getMinutes());
+    const name = "logkit-" + location.pathname.replace(/\//g, "") + "-" + (state.data.month || "all") + "-" + stamp + ".html";
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(new Blob([html], { type: "text/html;charset=utf-8" }));
+    a.download = name;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(a.href), 10000);
+    setStatus(status + " · 저장함 " + name + " (" + num(html.length / 1024, 0) + "KB)");
+  } catch (err) { setStatus("HTML 저장 실패 — " + String(err.message || err), true); }
+}
+
+/** 저장본이면 불러오기·API 키·기간 선택을 숨기고 저장 시각 표시를 붙인다. 저장본이면 true. */
+function initSnapshotMode() {
+  if (!SNAP) {
+    if ($("export")) $("export").onclick = exportSnapshot;
+    return false;
+  }
+  for (const id of ["key", "load", "month", "noeditor", "export"]) {
+    const el = $(id);
+    if (el) (el.closest("label") || el).style.display = "none";
+  }
+  // 다른 페이지 링크는 저장한 서버 주소로
+  document.querySelectorAll("nav.pages a").forEach((a) => { a.href = SNAP.origin + a.getAttribute("href"); });
+  const badge = document.createElement("span");
+  badge.className = "snapbadge";
+  badge.textContent = "저장본 · " + new Date(SNAP.savedAt).toLocaleString("sv-SE").slice(0, 16) + " 저장";
+  badge.title = SNAP.origin + SNAP.page;
+  $("status").before(badge);
+  document.title += " (저장본)";
+  return true;
+}
 function setStatus(text, isErr) { const el = $("status"); el.textContent = text; el.className = isErr ? "status err" : "status"; }
 async function api(path) {
   const res = await fetch(path, { headers: { "X-Api-Key": getKey() } });
@@ -567,6 +627,15 @@ function initPage() {
   $("noeditor").onchange = load;
   let resizeTimer = 0;
   window.addEventListener("resize", () => { clearTimeout(resizeTimer); resizeTimer = setTimeout(render, 150); });
+  if (initSnapshotMode()) {
+    state.data = SNAP.data;
+    state.selected = SNAP.selected || [];
+    state.colorOf = SNAP.colorOf || {};
+    renderChips();
+    render();
+    setStatus(SNAP.status || "");
+    return;
+  }
   $("noeditor").checked = !!loadPrefs().noEditor;
   $("key").value = getKey();
   if (getKey()) load(); else setStatus("API 키를 입력하고 불러오세요.");

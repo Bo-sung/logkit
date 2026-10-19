@@ -36,6 +36,7 @@ public static class AnalyticsPage
   <label class="chk"><input type="checkbox" id="noeditor"> 에디터 세션 제외</label>
   <input id="key" type="password" placeholder="API 키" style="width:150px">
   <button id="load">불러오기</button>
+  <button id="export" title="지금 화면의 데이터를 넣은 HTML 파일로 저장(서버 없이 열림)">HTML 저장</button>
 </header>
 <main>
   <section class="card wide">

@@ -53,6 +53,7 @@ public static class ReplayPage
   <label class="chk"><input type="checkbox" id="noeditor"> 에디터 세션 제외</label>
   <input id="key" type="password" placeholder="API 키" style="width:150px">
   <button id="load">불러오기</button>
+  <button id="export" title="지금 화면의 데이터를 넣은 HTML 파일로 저장(서버 없이 열림)">HTML 저장</button>
 </header>
 <main>
   <section class="card wide">
@@ -431,6 +432,14 @@ $("field").addEventListener("click", (ev) => {
 });
 
 state.units = {};
+if (initSnapshotMode()) {
+  // 저장본에는 저장할 때의 버전·스테이지 궤적만 들어 있다
+  applyData(SNAP.data);
+  $("ver").disabled = true;
+  $("stage").disabled = true;
+  setStatus(SNAP.status || "");
+  window.addEventListener("resize", () => { rp.bg = null; draw(); });
+} else {
 $("load").onclick = load;
 $("key").addEventListener("keydown", (ev) => { if (ev.key === "Enter") load(); });
 $("month").onchange = load;
@@ -440,6 +449,7 @@ window.addEventListener("resize", () => { clearTimeout(resizeTimer); resizeTimer
 $("noeditor").checked = !!loadPrefs().noEditor;
 $("key").value = getKey();
 if (getKey()) load(); else setStatus("API 키를 입력하고 불러오세요.");
+}
 </script>
 </body>
 </html>
