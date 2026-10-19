@@ -178,6 +178,20 @@ internal sealed class InsightTracker
 
                 break;
 
+            case GameEvents.SlotSpin:
+                _digest.Spins.Add(new InsightSpin
+                {
+                    Day = Number(data, "day") is double spinDay && spinDay >= 0 ? (int)spinDay : _day,
+                    Night = Bool(data, "isNight") == true,
+                    Pool = Text(data, "oddsPool"),
+                    Before = Number(data, "balanceBefore"),
+                    Price = Number(data, "price") ?? 0,
+                    Prize = Number(data, "plannedPrize") ?? 0,
+                    Symbol = Text(data, "plannedSymbol"),
+                    SaveId = _saveId,
+                });
+                break;
+
             case GameEvents.WorkbenchEnter:
                 _openWorkbench = orderId.Length > 0 ? (at, orderId) : null;
                 break;
@@ -525,6 +539,7 @@ internal sealed class InsightDigest
     public readonly List<InsightRaid> Raids = new();
     public readonly List<InsightPhase> Phases = new();
     public readonly List<InsightTutorial> Tutorials = new();
+    public readonly List<InsightSpin> Spins = new();
 }
 
 /// <summary>
@@ -595,6 +610,8 @@ internal static class InsightPlayers
             }
 
             v.Raids.AddRange(digest.Raids.Select(r => r.ForSession(Player(r.SaveId))));
+            v.Spins.AddRange(digest.Spins.Select(x => x.ForSession(Player(x.SaveId), session)));
+            v.ShopSessions += digest.Days.Count > 0 || digest.Phases.Count > 0 ? 1 : 0;
 
             foreach (InsightPhase phase in digest.Phases)
             {
@@ -780,6 +797,40 @@ public sealed class InsightVersion
     public List<InsightRaid> Raids { get; set; } = new();
     public List<InsightPhase> Phases { get; set; } = new();
     public List<InsightTutorial> Tutorials { get; set; } = new();
+    public List<InsightSpin> Spins { get; set; } = new();
+
+    /// <summary>상점 일차·구간 기록이 있는 세션 수(슬롯머신 이용률의 분모).</summary>
+    public int ShopSessions { get; set; }
+}
+
+/// <summary>
+/// 슬롯머신 회전 하나(Shop / slot_machine_spin_started, 결제 성공 때 기록). S = 플레이어, Session = 이 버전 안의 세션 번호.
+/// Prize는 회전 시작 때 정해진 지급 예정 금액(plannedPrize)이며, 회전 중 오브젝트가 꺼지면 실제로는 지급되지 않을 수 있다.
+/// Pool = oddsPool(first_three, last_funds, ordinary), Symbol = 당첨 심볼 이름(꽝이면 none).
+/// </summary>
+public sealed class InsightSpin
+{
+    public int S { get; set; }
+    public int Session { get; set; }
+    public int? Day { get; set; }
+    public bool Night { get; set; }
+    public string Pool { get; set; } = string.Empty;
+    public double? Before { get; set; }
+    public double Price { get; set; }
+    public double Prize { get; set; }
+    public string Symbol { get; set; } = string.Empty;
+
+    [System.Text.Json.Serialization.JsonIgnore]
+    internal string SaveId { get; set; } = string.Empty;
+
+    /// <summary>플레이어·세션 번호를 붙인 얕은 복사본. 캐시된 세션 기록은 바꾸지 않는다.</summary>
+    internal InsightSpin ForSession(int s, int session)
+    {
+        InsightSpin copy = (InsightSpin)MemberwiseClone();
+        copy.S = s;
+        copy.Session = session;
+        return copy;
+    }
 }
 
 /// <summary>

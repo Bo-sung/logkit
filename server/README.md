@@ -215,3 +215,5 @@ saveId가 없는 이전 로그는 세션이다. 일차는 상점 이벤트의 `d
 금고 관통 내성은 현재 씬 값(은행 3, 나머지 1)을 임시로 쓴다. 튜토리얼 퍼널은 `Tutorial / step_started·step_completed·tutorial_skipped·tutorial_ended`로 그리며
 `debugSkipped`가 있는 진행은 뺀다. n일차 낮·밤 보유 달러는 낮 = `shop_opened`의 `balance`, 밤 = 그날 `shop_close_requested`의 `balance` 또는
 다음 날 영업 시작 잔액(선택)이다. 모듈 보유 개수는 기본 해금 12종 + 그 구간까지 습격 종료 `moduleCrateRewards`로 얻은 잠긴 모듈(ID 10~16) 종류 수다. 손님 이름표(`Insights.cs` `CustomerNames`)는 게임 `CustomerOrderData.json` 기준이다.
+슬롯머신 카드는 `Shop / slot_machine_spin_started`(결제 성공 때 1회)로 세션당 회전 수, 플레이어별 환급률(당첨금 ÷ 지출)·순이득, 일차별 이용률,
+확률표(`oddsPool`)별 실제 환급률과 게임 가중치로 계산한 이론 환급률, 당첨 심볼 분포, 회전 직전 잔액을 그린다. 당첨금은 지급 예정 금액(`plannedPrize`)이다.

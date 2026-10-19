@@ -31,6 +31,7 @@ internal static class GameEvents
     public const string OrderCompleted = "order_completed";   // success, customerDead
     public const string ShopOpened = "shop_opened";           // balance — 영업 시작 때 잔액
     public const string ShopCloseRequested = "shop_close_requested"; // balance — 수동 영업 종료 때 잔액
+    public const string SlotSpin = "slot_machine_spin_started"; // day, isNight, oddsPool, balanceBefore, price, plannedPrize, plannedSymbol — 결제 성공 때
     public const string WeaponFired = "weapon_fired";         // time, position, weaponAssemblyId (Shop: 공방 주간, NightRaid: 습격 중)
     public const string RaidWeaponConfig = "raid_weapon_config"; // time, weaponCode, weaponAssemblyId — 습격 중 처음 쓰는 구성
 

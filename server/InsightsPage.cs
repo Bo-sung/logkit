@@ -242,6 +242,66 @@ public static class InsightsPage
     <div id="c-modules" class="cells"></div>
   </section>
 
+  <div class="section">슬롯머신</div>
+
+  <section class="card wide">
+    <h3>슬롯머신 요약</h3>
+    <p class="sub">회전 1회 = $500 · 당첨금 = 회전 시작 때 정해진 지급 예정 금액(plannedPrize) · 환급률 = 당첨금 ÷ 지출 ·
+      이론 = 그 회전들의 확률표(처음 3회·마지막 판·일반) 기대 당첨금 ÷ 지출 · 이용 세션 = 한 번이라도 돌린 세션 / 상점 기록이 있는 세션 ·
+      슬롯머신 로그(slot_machine_spin_started)를 넣은 빌드부터 쌓입니다</p>
+    <div id="t-slot"></div>
+  </section>
+
+  <section class="card">
+    <h3>세션당 슬롯머신 회전 횟수<span class="unitsw" data-unit="slotspins"></span></h3>
+    <p class="sub">한 번이라도 돌린 세션만 · 세션 1개 = 1 · 안 돌린 세션 비율은 요약 표의 이용 세션으로 봅니다</p>
+    <div id="c-slotspins" class="chart"></div>
+  </section>
+
+  <section class="card">
+    <h3>플레이어별 손실 대비 이득 비율<span class="unitsw" data-unit="slotrtp"></span></h3>
+    <p class="sub">플레이어(세이브)의 당첨금 합 ÷ 지출 합 · 100% 이상이면 본전 이상 · 플레이어 1명 = 1</p>
+    <div id="c-slotrtp" class="chart"></div>
+  </section>
+
+  <section class="card">
+    <h3>플레이어 슬롯머신 순이득</h3>
+    <p class="sub">당첨금 − 지출 · 전체 = 플레이어의 모든 회전 합(플레이어 1명 = 1), n일차 = 그날 돌린 플레이어의 그날 합(플레이어-일차 1개 = 1) ·
+      평균은 툴팁에 있습니다</p>
+    <div id="c-slotnet" class="chart"></div>
+  </section>
+
+  <section class="card">
+    <h3>일차별 슬롯머신 이용 플레이어 비율<span class="unitsw" data-unit="slotday"></span></h3>
+    <p class="sub">그 일차에 한 번이라도 돌린 플레이어 / 그 일차(낮·밤 구간 또는 상점 기록)에 도달한 플레이어</p>
+    <div id="c-slotday" class="chart"></div>
+  </section>
+
+  <section class="card">
+    <h3>확률표별 실제 환급률</h3>
+    <p class="sub">oddsPool별 당첨금 ÷ 지출 · 괄호 = 게임 가중치로 계산한 이론 환급률 · 처음 3회 = 저·중 당첨 ×5,
+      마지막 판(결제 전 잔액 &lt; $1,000) = 저·중·폭발 ×5 · 회전 수가 적으면 방사($50,000) 한 번에 크게 흔들립니다</p>
+    <div id="c-slotpool" class="chart"></div>
+  </section>
+
+  <section class="card">
+    <h3>당첨 심볼 분포<span class="unitsw" data-unit="slotsym"></span></h3>
+    <p class="sub">세 릴이 모두 같을 때만 당첨 · 회전 1회 = 1 · 툴팁의 이론 = 그 회전들의 확률표로 계산한 기대 비율</p>
+    <div id="c-slotsym" class="chart"></div>
+  </section>
+
+  <section class="card">
+    <h3>회전 직전 잔액<span class="unitsw" data-unit="slotbal"></span></h3>
+    <p class="sub">결제 전 잔액(balanceBefore) · 회전 1회 = 1 · $1,000 미만은 마지막 판 확률표가 적용된 회전</p>
+    <div id="c-slotbal" class="chart"></div>
+  </section>
+
+  <section class="card">
+    <h3>플레이어별 회전 수 × 순이득</h3>
+    <p class="sub">점 1개 = 플레이어 1명(모든 회전 합) · 오른쪽 아래로 갈수록 많이 돌려 많이 잃음 · 점선 = 이론 환급률(일반 98%)로 기대되는 순이득</p>
+    <div id="c-slotscatter" class="chart"></div>
+  </section>
+
   <section class="card wide">
     <details>
       <summary>집계 기준 — 게임이 남기는 로그 이벤트</summary>
@@ -266,6 +326,9 @@ public static class InsightsPage
 성공       습격 종료 이벤트의 survived
 재도전     실패(survived = false)한 습격 뒤 같은 플레이어의 습격이 더 있음. 그 뒤 기록이 없으면 재도전 안 함으로 셈
 대응 시간  같은 습격의 적 발견 → 적 처치(enemyId, time). 발견 없이 처치된 적은 뺌
+슬롯머신   Shop / slot_machine_spin_started(레버를 당겨 결제가 성공한 순간 1회). 당첨금은 plannedPrize(지급 예정)이며
+           회전 중 오브젝트가 꺼지면 실제 지급이 안 될 수 있음. 이론 환급률 = 게임 SlotMachineReels 가중치
+           (꽝 709 / 저 200 / 중 70 / 폭발 20 / 방사 1, 처음 3회 저·중 ×5, 마지막 판 저·중·폭발 ×5)
 박스플롯   상자 = 1~3사분위, 가운데 선 = 중앙값, 수염 = 1.5×IQR 안의 최솟값·최댓값, 점 = 그 밖의 값</pre>
     </details>
   </section>
@@ -797,6 +860,164 @@ function renderPenExp() {
   }, "관통 모듈 수", "");
 }
 
+// ─── 슬롯머신 ───
+// 게임 SlotMachineReels.ChooseResult의 가중치. 저 = 기본·연장($1,000), 중 = 연사·관통($2,000), 폭발 $5,000, 방사 $50,000
+const SLOT_POOLS = [["first_three", "처음 3회"], ["last_funds", "마지막 판"], ["ordinary", "일반"]];
+const SLOT_SYMBOLS = [["none", "꽝", 0], ["기본", "기본", 1000], ["연장", "연장", 1000], ["연사", "연사", 2000], ["관통", "관통", 2000],
+  ["폭발", "폭발", 5000], ["방사", "방사", 50000]];
+function slotOdds(pool) {
+  const intro = pool === "first_three", last = pool === "last_funds", m = intro || last ? 5 : 1;
+  const w = { none: 709, low: 200 * m, mid: 70 * m, exp: 20 * (last ? 5 : 1), rad: 1 };
+  const total = w.none + w.low + w.mid + w.exp + w.rad;
+  const p = { none: w.none, 기본: w.low / 2, 연장: w.low / 2, 연사: w.mid / 2, 관통: w.mid / 2, 폭발: w.exp, 방사: w.rad };
+  Object.keys(p).forEach((k) => { p[k] /= total; });
+  return { p, ev: (w.low * 1000 + w.mid * 2000 + w.exp * 5000 + w.rad * 50000) / total };
+}
+const SLOT_ODDS = Object.fromEntries(SLOT_POOLS.map(([k]) => [k, slotOdds(k)]));
+const spinEv = (x) => (SLOT_ODDS[x.pool] || SLOT_ODDS.ordinary).ev * x.price / 500;
+const sumOf = (list, f) => list.reduce((a, x) => a + f(x), 0);
+const signedMoney = (x) => (x > 0 ? "+" : x < 0 ? "−" : "") + money(Math.abs(x));
+function groupMap(list, key) {
+  const m = new Map();
+  list.forEach((x) => { const k = key(x); if (!m.has(k)) m.set(k, []); m.get(k).push(x); });
+  return m;
+}
+function median(list) { const s = list.slice().sort((a, b) => a - b); return s.length ? quantile(s, 0.5) : null; }
+
+function renderSlot(vs) {
+  const svs = vs.filter((v) => v.spins && v.spins.length);
+  const ids = ["c-slotspins", "c-slotrtp", "c-slotnet", "c-slotday", "c-slotpool", "c-slotsym", "c-slotbal", "c-slotscatter"];
+  if (!svs.length) {
+    $("t-slot").innerHTML = emptyBox("슬롯머신 기록이 없습니다. 슬롯머신 로그(Shop / slot_machine_spin_started)를 넣은 빌드부터 쌓입니다.");
+    ids.forEach((id) => { $(id).innerHTML = ""; });
+    return;
+  }
+  const bySession = (v) => [...groupMap(v.spins, (x) => x.session).values()];
+  const byPlayer = (v) => [...groupMap(v.spins, (x) => x.s).values()];
+  const net = (list) => sumOf(list, (x) => x.prize - x.price);
+
+  // 요약 표
+  let rows = "";
+  svs.forEach((v) => {
+    const sp = v.spins, sess = bySession(v), players = byPlayer(v), counts = sess.map((l) => l.length);
+    const cost = sumOf(sp, (x) => x.price), prize = sumOf(sp, (x) => x.prize), nets = players.map(net);
+    const cell = (main, sub) => "<td>" + main + (sub ? ' <span class="muted">' + sub + "</span>" : "") + "</td>";
+    rows += "<tr><td>" + esc(v.version) + "</td>" +
+      cell(sess.length + " / " + v.shopSessions, pct(ratio(sess.length, v.shopSessions), 0)) +
+      cell(num(sp.length, 0) + "회", "") +
+      cell(num(avg(counts), 1) + "회", "중앙 " + num(median(counts), 1)) +
+      cell(money(cost), "") + cell(money(prize), "") +
+      cell(pct(ratio(prize, cost), 0), "이론 " + pct(ratio(sumOf(sp, spinEv), cost), 0)) +
+      cell(signedMoney(avg(nets)), "중앙 " + signedMoney(median(nets))) +
+      cell(nets.filter((x) => x > 0).length + " / " + players.length + "명", pct(ratio(nets.filter((x) => x > 0).length, players.length), 0)) +
+      cell(pct(ratio(sp.filter((x) => x.prize > 0).length, sp.length), 0), "") +
+      cell(pct(ratio(sp.filter((x) => x.night).length, sp.length), 0), "") + "</tr>";
+  });
+  $("t-slot").innerHTML = '<div class="tablewrap"><table><tr><th>버전</th><th>이용 세션</th><th>회전</th><th>세션당 회전</th><th>지출</th>' +
+    "<th>당첨금</th><th>환급률</th><th>플레이어 평균 순이득</th><th>이득 본 플레이어</th><th>당첨률</th><th>밤 회전</th></tr>" + rows + "</table></div>";
+
+  // 세션당 회전 횟수
+  const SPIN_EDGES = [1, 2, 3, 4, 6, 11, 21, 51];
+  const spinCats = SPIN_EDGES.map((e, i) => { const next = SPIN_EDGES[i + 1]; return !next ? e + "+" : next - e === 1 ? String(e) : e + "~" + (next - 1); });
+  distribution($("c-slotspins"), svs, (v) => bySession(v).map((l) => l.length), spinCats,
+    (n) => SPIN_EDGES.findLastIndex((e) => n >= e), "세션", "slotspins");
+
+  // 플레이어 환급률
+  const RTP_EDGES = [0, 0.5, 1, 1.5, 2, 4];
+  const rtpCats = ["0% (전부 꽝)", "~50%", "50~100%", "100~150%", "150~200%", "200~400%", "400%+"];
+  distribution($("c-slotrtp"), svs, (v) => byPlayer(v).map((l) => sumOf(l, (x) => x.prize) / sumOf(l, (x) => x.price)), rtpCats,
+    (r) => r === 0 ? 0 : 1 + RTP_EDGES.slice(1).filter((e) => r >= e).length, "명", "slotrtp");
+
+  // 순이득: 전체(플레이어) + n일차(플레이어-일차)
+  const spinDays = daysOf(svs, (v) => v.spins);
+  boxV($("c-slotnet"), svs, ["all"].concat(spinDays), (v, c) => c === "all" ? byPlayer(v).map(net)
+    : [...groupMap(v.spins.filter((x) => x.day === c), (x) => x.s).values()].map(net), signedMoney,
+    (c) => c === "all" ? "전체" : dayLabel(c));
+
+  // 일차별 이용 플레이어 비율
+  const count = isCount("slotday");
+  const reachDays = daysOf(svs, (v) => v.phases.concat(v.days));
+  dayLines($("c-slotday"), svs, reachDays, (v) => {
+    const lastDay = new Map();
+    v.phases.concat(v.days).forEach((x) => lastDay.set(x.s, Math.max(lastDay.get(x.s) ?? -1, x.day)));
+    v.spins.forEach((x) => { if (x.day != null) lastDay.set(x.s, Math.max(lastDay.get(x.s) ?? -1, x.day)); });
+    return reachDays.map((day) => {
+      const reached = [...lastDay.values()].filter((last) => last >= day).length;
+      const used = new Set(v.spins.filter((x) => x.day === day).map((x) => x.s)).size;
+      const spins = v.spins.filter((x) => x.day === day).length;
+      return { x: day, y: reached ? (count ? used : used / reached) : null, used, reached, spins };
+    });
+  }, (v, p) => v.version + " · " + dayLabel(p.x) + "\n이용 " + pct(p.used / p.reached) + " (" + p.used + " / " + p.reached + "명)\n회전 " + p.spins + "회", count);
+
+  // 확률표별 환급률
+  const poolKeys = SLOT_POOLS.map(([k, n]) => n + " (이론 " + pct(SLOT_ODDS[k].ev / 500, 0) + ")");
+  let poolMax = 0;
+  const poolCell = (v, i) => {
+    const list = v.spins.filter((x) => (x.pool || "ordinary") === SLOT_POOLS[i][0]);
+    if (!list.length) return null;
+    const cost = sumOf(list, (x) => x.price), prize = sumOf(list, (x) => x.prize), r = prize / cost;
+    return { value: r, label: pct(r, 0), tip: "실제 " + pct(r) + " · 이론 " + pct(ratio(sumOf(list, spinEv), cost)) + "\n회전 " + list.length + "회 · 지출 " +
+      money(cost) + " · 당첨금 " + money(prize) };
+  };
+  svs.forEach((v) => SLOT_POOLS.forEach((_, i) => { const c = poolCell(v, i); if (c) poolMax = Math.max(poolMax, c.value); }));
+  hbars($("c-slotpool"), svs, poolKeys, (v, key) => poolCell(v, poolKeys.indexOf(key)), Math.max(1, poolMax), false, 170);
+
+  // 당첨 심볼
+  const symKeys = SLOT_SYMBOLS.map(([, n, prize]) => prize ? n + " ($" + num(prize, 0) + ")" : n);
+  hbars($("c-slotsym"), svs, symKeys, (v, key) => {
+    const [id] = SLOT_SYMBOLS[symKeys.indexOf(key)], sp = v.spins;
+    const n = sp.filter((x) => (x.symbol || "none") === id).length;
+    const theory = sumOf(sp, (x) => (SLOT_ODDS[x.pool] || SLOT_ODDS.ordinary).p[id]) / sp.length;
+    const bar = shareBar("slotsym", n, sp.length, "회", 1);
+    bar.tip += "\n이론 " + pct(theory, 2);
+    return bar;
+  }, isCount("slotsym") ? 0 : 1, false, 130);
+
+  // 회전 직전 잔액
+  const BAL_EDGES = [0, 1000, 2000, 5000, 10000, 20000];
+  const balCats = ["< $1,000", "$1,000~2,000", "$2,000~5,000", "$5,000~10,000", "$10,000~20,000", "$20,000+"];
+  distribution($("c-slotbal"), svs, (v) => v.spins.filter((x) => x.before != null).map((x) => x.before), balCats,
+    (b) => BAL_EDGES.findLastIndex((e) => b >= e), "회", "slotbal");
+
+  // 회전 수 × 순이득
+  scatter($("c-slotscatter"), svs, (v) => byPlayer(v).map((l) => ({ x: l.length, y: net(l), prize: sumOf(l, (x) => x.prize),
+    cost: sumOf(l, (x) => x.price) })), (n) => -n * 500 * (1 - SLOT_ODDS.ordinary.ev / 500), (x) => num(x, 0) + "회", signedMoney,
+    (v, p) => v.version + "\n회전 " + p.x + "회\n순이득 " + signedMoney(p.y) + "\n지출 " + money(p.cost) + " · 당첨금 " + money(p.prize) +
+      "\n환급률 " + pct(ratio(p.prize, p.cost), 0));
+}
+
+/** 버전별 (x, y) 산점도. guide(x)를 주면 기대선(점선)을 그린다. y축은 0을 포함한다. */
+function scatter(el, vs, pointsOf, guide, xFmt, yFmt, tipOf) {
+  const series = vs.map((v) => ({ v, pts: pointsOf(v) })).filter((s) => s.pts.length);
+  if (!series.length) { el.innerHTML = emptyBox("기록된 데이터가 없습니다."); return; }
+  const all = series.flatMap((s) => s.pts);
+  const maxX = niceMax(Math.max(1, ...all.map((p) => p.x)));
+  const ty = ticks(Math.min(0, ...all.map((p) => p.y)), Math.max(0, ...all.map((p) => p.y)));
+  const minY = ty[0], maxY = ty[ty.length - 1];
+  const W = widthOf(el), H = 260, left = 64, top = 10, bottom = 28, plotW = W - left - 16, plotH = H - top - bottom;
+  const sx = (x) => left + x / maxX * plotW, sy = (y) => top + plotH - (y - minY) / (maxY - minY) * plotH;
+  let s = "";
+  ty.forEach((t) => {
+    s += '<line x1="' + left + '" x2="' + (W - 16) + '" y1="' + sy(t) + '" y2="' + sy(t) + '" stroke="' + (t === 0 ? "var(--axis)" : "var(--grid)") + '"/>';
+    s += '<text x="' + (left - 6) + '" y="' + (sy(t) + 4) + '" text-anchor="end">' + esc(yFmt(t)) + "</text>";
+  });
+  for (let i = 0; i <= 4; i++) {
+    const x = maxX * i / 4;
+    s += '<text x="' + sx(x) + '" y="' + (H - 8) + '" text-anchor="middle">' + esc(xFmt(x)) + "</text>";
+  }
+  if (guide) {
+    // 직선 기대선을 그림 영역 안에서 자른다
+    const g0 = guide(0), g1 = guide(maxX), y1 = Math.max(minY, Math.min(maxY, g1));
+    const x1 = g1 === g0 ? maxX : maxX * Math.min(1, (y1 - g0) / (g1 - g0));
+    s += '<line x1="' + sx(0) + '" y1="' + sy(g0) + '" x2="' + sx(x1) + '" y2="' + sy(y1) + '" stroke="var(--muted)" stroke-dasharray="4 4"/>';
+  }
+  series.forEach(({ v, pts }) => pts.forEach((p) => {
+    s += '<circle cx="' + sx(p.x) + '" cy="' + sy(p.y) + '" r="5" fill="' + color(v) + '" fill-opacity="0.85" stroke="var(--panel)" stroke-width="2"/>';
+    s += '<circle cx="' + sx(p.x) + '" cy="' + sy(p.y) + '" r="10" fill="transparent" data-tip="' + esc(tipOf(v, p)) + '"/>';
+  }));
+  el.innerHTML = legend(series.map((x) => x.v)) + '<svg viewBox="0 0 ' + W + " " + H + '">' + s + "</svg>";
+}
+
 // ─── 일반 통계 ───
 function renderGeneral(vs) {
   const days = daysOf(vs, (v) => v.days);
@@ -880,6 +1101,7 @@ function render() {
   renderPenExp();
   renderGeneral(vs);
   renderModules();
+  renderSlot(vs);
 }
 
 document.querySelectorAll("#rule input").forEach((inp) => {
