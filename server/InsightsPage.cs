@@ -228,6 +228,31 @@ public static class InsightsPage
     </div>
   </section>
 
+  <div class="section">사망 후 진행</div>
+
+  <section class="card wide">
+    <div class="q">습격에서 죽은 뒤에도 게임을 이어 가는가?</div>
+    <h3>사망 후 다음 일차 진행률</h3>
+    <p class="sub">사망을 경험한 세이브 중, 마지막 사망 일차보다 뒤의 일차까지 진행한 세이브 비율 · 버전마다 따로 계산 ·
+      사망 = 연습이 아닌 습격의 survived = false · 진행 = 같은 버전·같은 세이브의 낮·밤 구간, 상점 일차, 연습이 아닌 습격 중
+      마지막 사망 일차보다 큰 일차가 하나라도 있음 · 같은 날 재도전 성공만으로는 진행으로 세지 않음 · 막대 아래 = 진행 세이브 / 집계 대상 세이브</p>
+    <div id="c-progress" class="chart"></div>
+    <div class="subhead">선택한 버전</div>
+    <div id="t-progress"></div>
+    <details style="margin-top:10px">
+      <summary>모든 버전 집계(선택과 관계없이 이전 버전의 등락과 기록 부족 확인)</summary>
+      <div id="t-progress-all" style="margin-top:8px"></div>
+    </details>
+    <div class="subhead">해석할 때 주의</div>
+    <ul class="sub" style="margin:0;padding-left:18px">
+      <li>후속 일차 미관측은 '진행 불가능'이나 이탈 원인을 확정하지 않습니다(그날 플레이를 마쳤을 수도 있음).</li>
+      <li>세이브 수는 실제 사람 수와 다를 수 있습니다(한 사람이 새 게임을 여러 번 시작하면 여러 세이브).</li>
+      <li>"에디터 세션 제외"를 끄면 에디터 세션도 포함됩니다.</li>
+      <li>사망 세이브가 적은 버전은 한두 건에 비율이 크게 흔들립니다. 막대 아래의 건수를 함께 보세요.</li>
+      <li>버전마다 참가 조건(테스터, 플레이 시간)이 달라 기능 변경의 인과 효과를 따로 떼어 낼 수 없습니다.</li>
+    </ul>
+  </section>
+
   <div class="section">일반 통계</div>
 
   <section class="card">
@@ -513,6 +538,8 @@ public static class InsightsPage
            같은 세션에서 코드로 본 구성으로 풀어 씀. 둘 다 없으면 총 미확인
 성공       습격 종료 이벤트의 survived
 재도전     실패(survived = false)한 습격 뒤 같은 플레이어의 습격이 더 있음. 그 뒤 기록이 없으면 재도전 안 함으로 셈
+사망 후 진행  사망한 세이브(연습 제외 습격의 survived = false) 중 마지막 사망 일차보다 큰 일차(phases·days·raids)가 관측된 비율.
+           사망 기록에 day가 없는 세이브는 집계 불가로 따로 셈
 이탈       습격 종료 뒤 같은 플레이어의 상점 이벤트·습격 시작이 없음(종료 후 20초 안의 기록은 귀환 처리로 보고 무시). 같은 버전 안에서만 봄
 대응 시간  같은 습격의 적 발견 → 적 처치(enemyId, time). 발견 없이 처치된 적은 뺌
 은퇴       Game / retire_completed(결제 직후, 세이브의 첫 은퇴만 — 같은 세이브에 여러 번이면 자동저장을 불러와 재시도), retire_failed(reason)
@@ -1643,6 +1670,70 @@ function renderQuit(vs) {
   }, count ? 0 : 1, false, 120);
 }
 
+// ─── 사망 후 진행 ───
+/**
+ * 버전 하나의 사망 후 다음 일차 진행 집계. 세이브 = 기록의 s.
+ * 분모 = 연습이 아닌 습격에서 사망한 세이브(사망 기록에 day가 하나라도 없으면 집계 불가로 따로 셈),
+ * 분자 = 그 세이브의 phases·days·연습이 아닌 raids 중 마지막 사망 일차보다 큰 day가 있는 세이브.
+ */
+function deathProgress(v) {
+  const normal = v.raids.filter((r) => !isTraining(r));
+  const bySave = groupMap(normal.filter((r) => r.survived === false), (r) => r.s);
+  const daysOfSave = new Map();
+  v.phases.concat(v.days, normal).forEach((x) => {
+    if (x.day == null) return;
+    if (!daysOfSave.has(x.s)) daysOfSave.set(x.s, []);
+    daysOfSave.get(x.s).push(x.day);
+  });
+  let eligible = 0, progressed = 0, unknownDay = 0;
+  bySave.forEach((list, s) => {
+    if (list.some((r) => r.day == null)) { unknownDay++; return; }
+    const lastDeath = Math.max(...list.map((r) => r.day));
+    eligible++;
+    if ((daysOfSave.get(s) || []).some((d) => d > lastDeath)) progressed++;
+  });
+  return { deathSaves: bySave.size, eligible, progressed, unobserved: eligible - progressed, unknownDay,
+    rate: eligible ? progressed / eligible : null };
+}
+
+function progressTable(list) {
+  const row = (v) => {
+    const p = deathProgress(v);
+    const rate = p.rate != null ? pct(p.rate) : p.deathSaves ? "해당 없음(일차 기록 부족)" : "해당 없음(사망 표본 없음)";
+    return "<tr><td>" + esc(v.version) + "</td><td>" + p.deathSaves + "</td><td>" + p.eligible + "</td><td>" + p.progressed + "</td><td>" +
+      p.unobserved + "</td><td>" + rate + "</td><td>" + p.unknownDay + "</td></tr>";
+  };
+  return '<div class="tablewrap"><table><tr><th>버전</th><th>사망 세이브 수</th><th>집계 대상 수</th><th>다음 일차 진행 수</th>' +
+    "<th>후속 일차 미관측 수</th><th>진행률</th><th>일차 미기록 집계 불가 수</th></tr>" + list.map(row).join("") + "</table></div>";
+}
+
+function renderProgress(vs) {
+  const el = $("c-progress");
+  $("t-progress").innerHTML = vs.length ? progressTable(vs) : emptyBox("버전을 선택하세요.");
+  $("t-progress-all").innerHTML = progressTable(state.data.versions);
+  if (!vs.length) { el.innerHTML = emptyBox("버전을 선택하세요."); return; }
+  const W = widthOf(el), H = 280, left = 48, top = 22, bottom = 48, plotW = W - left - 8, plotH = H - top - bottom;
+  let s = yAxis(W, top, plotH, left, 1, (x) => num(x * 100, 0) + "%");
+  const groupW = plotW / vs.length, bw = Math.max(14, Math.min(64, groupW * 0.5));
+  vs.forEach((v, i) => {
+    const p = deathProgress(v), cx = left + groupW * i + groupW / 2, x = cx - bw / 2;
+    if (p.rate != null) {
+      const h = plotH * p.rate, y = top + plotH - h;
+      if (h > 0) s += '<path d="' + barUp(x, y, bw, h) + '" fill="' + color(v) + '"/>';
+      s += '<text x="' + cx + '" y="' + (y - 6) + '" text-anchor="middle" class="lbl">' + pct(p.rate) + "</text>";
+    } else {
+      s += '<text x="' + cx + '" y="' + (top + plotH - 8) + '" text-anchor="middle">해당 없음</text>';
+    }
+    const sub = p.rate != null ? p.progressed + " / " + p.eligible + "개" : p.deathSaves ? "일차 기록 부족" : "사망 표본 없음";
+    s += '<text x="' + cx + '" y="' + (H - 26) + '" text-anchor="middle" class="lbl">' + esc(v.version) + "</text>";
+    s += '<text x="' + cx + '" y="' + (H - 10) + '" text-anchor="middle">' + esc(sub) + "</text>";
+    s += '<rect x="' + (left + groupW * i) + '" y="' + top + '" width="' + groupW + '" height="' + plotH + '" fill="transparent" data-tip="' +
+      esc(v.version + "\n사망 세이브 " + p.deathSaves + "개 · 집계 대상 " + p.eligible + "개\n다음 일차 진행 " + p.progressed + "개 · 후속 일차 미관측 " +
+        p.unobserved + "개\n진행률 " + (p.rate != null ? pct(p.rate) : "해당 없음") + (p.unknownDay ? "\n일차 미기록으로 집계 불가 " + p.unknownDay + "개" : "")) + '"/>';
+  });
+  el.innerHTML = '<svg viewBox="0 0 ' + W + " " + H + '">' + s + "</svg>";
+}
+
 // ─── 일반 통계 ───
 function renderGeneral(vs) {
   const days = daysOf(vs, (v) => v.days);
@@ -1735,6 +1826,7 @@ function render() {
   renderNpc(vs);
   renderRetry(vs);
   renderQuit(vs);
+  renderProgress(vs);
   renderEndgame(vs);
   renderResponse(vs);
   renderPenExp();
