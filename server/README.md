@@ -32,13 +32,11 @@ dotnet run        # http://0.0.0.0:5000 에서 대기
 | KeepRawJsonl | true | 수신 원문을 `data/raw/`에 보존할지 여부 |
 | RawRetentionDays | 90 | raw 보존 일수. 기동 시 경과분을 삭제 |
 | InboxProcessIntervalSeconds | 2 | 업로드가 오면 이만큼 더 기다렸다가 그사이 도착분까지 한 번에 처리 |
-| DerivedMetrics | (예시 3건) | 파생 지표 규칙. 분자·분모 지표 키의 몫을 계산한다. 키는 클라이언트 `GameLogger.Count`의 key와 일치 |
+| DerivedMetrics | (공격 명중률 1건) | 파생 지표 규칙. 분자·분모 지표 키의 몫을 계산한다. 키는 클라이언트 `GameLogger.Count`의 key와 일치 |
 
 ```json
 "DerivedMetrics": [
-  { "Name": "공격 명중률", "Numerator": "AttackHit", "Denominator": "Attack", "Unit": "%" },
-  { "Name": "스캔 사용률", "Numerator": "ScanUsed", "Denominator": "Scan", "Unit": "%" },
-  { "Name": "소리 발생원 접근률", "Numerator": "SoundSourceAccessed", "Denominator": "SoundSource", "Unit": "%" }
+  { "Name": "공격 명중률", "Numerator": "AttackHit", "Denominator": "Attack", "Unit": "%" }
 ]
 ```
 

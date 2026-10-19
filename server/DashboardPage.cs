@@ -116,6 +116,7 @@ nav.pages b { color: var(--text); font-weight: 600; }
 
   <section class="card">
     <div class="row">
+      <select id="sver" style="min-width:140px"><option value="">모든 버전</option></select>
       <input id="sq" placeholder="세션 검색 (ID · 플랫폼 · 버전)" style="width:240px">
       <label class="chk"><input type="checkbox" id="sonly"> 문제 세션만</label>
       <select id="ssort">
@@ -175,8 +176,13 @@ nav.pages b { color: var(--text); font-weight: 600; }
 "use strict";
 const $ = (id) => document.getElementById(id);
 const KEY_STORE = "logkit.key";
+const VER_STORE = "logkit.sessions.version";
+// 세션 화면에서 숨기는 지표 키(쓰지 않는 스캔·소리 발생원 계측)
+const HIDDEN_METRICS = new Set(["Scan", "ScanUsed", "SoundSource", "SoundSourceAccessed"]);
+const shownMetrics = (list) => (list || []).filter((m) => !HIDDEN_METRICS.has(m.key));
 const LIMIT = 500;
-const state = { month: null, session: null, offset: 0, matched: 0 };
+const state = { month: null, session: null, offset: 0, matched: 0, version: "" };
+try { state.version = localStorage.getItem(VER_STORE) || ""; } catch (_) {}
 
 function esc(s) {
   return String(s ?? "").replace(/[&<>"']/g, (c) =>
@@ -237,7 +243,7 @@ async function loadMonthMetrics() {
   for (const d of data.derived) {
     html += '<span class="chip rate"><b>' + esc(d.name) + "</b> " + rateText(d) + "</span>";
   }
-  for (const m of data.metrics.slice(0, 12)) {
+  for (const m of shownMetrics(data.metrics).slice(0, 12)) {
     html += '<span class="chip"><b>' + esc(m.key) + "</b> " + num(m.count) + "회"
       + (m.sum ? " · 합계 " + fmtNum(m.sum) : "") + "</span>";
   }
@@ -275,10 +281,18 @@ async function loadMonths(keep) {
 async function loadSessions() {
   if (!state.month) { $("sbody").innerHTML = ""; $("scount").textContent = ""; return; }
   const p = new URLSearchParams({ month: state.month });
+  const ver = state.version;
+  if (ver) p.set("version", ver);
   if ($("sq").value.trim()) p.set("q", $("sq").value.trim());
   if ($("sonly").checked) p.set("onlyIssues", "true");
   p.set("sort", $("ssort").value);
-  const data = await (await api("/api/sessions?" + p)).json();
+  let data = await (await api("/api/sessions?" + p)).json();
+  if (ver && !data.versions.includes(ver)) {
+    // 저장해 둔 버전이 이 달에 없으면 모든 버전으로 다시 조회
+    p.delete("version");
+    data = await (await api("/api/sessions?" + p)).json();
+  }
+  renderVersions(data.versions, data.versions.includes(ver) ? ver : "");
   state.session = null;
   $("detail").hidden = true;
   $("dmetrics").innerHTML = "";
@@ -309,6 +323,13 @@ async function loadSessions() {
     body.appendChild(tr);
   }
   await loadMonthMetrics();
+}
+
+function renderVersions(versions, current) {
+  const sel = $("sver");
+  sel.innerHTML = '<option value="">모든 버전</option>' + versions.map((v) =>
+    '<option value="' + esc(v) + '">' + esc(v || "(버전 없음)") + "</option>").join("");
+  sel.value = current;
 }
 
 async function openSession(id) {
@@ -359,9 +380,10 @@ async function loadDetail() {
     metricsHtml += '<div class="row">' + data.derived.map((d) =>
       '<span class="chip rate"><b>' + esc(d.name) + "</b> " + rateText(d) + '</span>').join("") + "</div>";
   }
-  if (data.metrics && data.metrics.length) {
+  const metrics = shownMetrics(data.metrics);
+  if (metrics.length) {
     let rows = "";
-    for (const m of data.metrics) {
+    for (const m of metrics) {
       rows += "<tr><td>" + esc(m.key) + "</td><td>" + num(m.count) + "</td><td>"
         + (m.count ? fmtNum(m.avg) : "–") + "</td><td>" + fmtNum(m.sum) + "</td></tr>";
     }
@@ -428,6 +450,11 @@ $("month").onchange = async () => { state.month = $("month").value || null; awai
 $("sq").addEventListener("keydown", (ev) => { if (ev.key === "Enter") loadSessions(); });
 $("ssort").onchange = loadSessions;
 $("sonly").onchange = loadSessions;
+$("sver").onchange = () => {
+  state.version = $("sver").value;
+  try { localStorage.setItem(VER_STORE, state.version); } catch (_) {}
+  loadSessions();
+};
 
 $("dapply").onclick = () => { state.offset = 0; loadDetail(); };
 $("dq").addEventListener("keydown", (ev) => { if (ev.key === "Enter") { state.offset = 0; loadDetail(); } });

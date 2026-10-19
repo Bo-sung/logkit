@@ -303,11 +303,12 @@ public static class Program
 
     /// <summary>
     /// GET /api/sessions 처리기. 월별 세션 목록을 검색 조건에 맞춰 돌려준다.
-    /// month(필수), q(ID·플랫폼·버전 부분 일치), onlyIssues(경고·오류·예외가 있는 세션만), sort(date·errors·total)를 사용하며
+    /// month(필수), version(앱 버전 정확히 일치), q(ID·플랫폼·버전 부분 일치), onlyIssues(경고·오류·예외가 있는 세션만), sort(date·errors·total)를 사용하며
     /// month 형식이 틀리면 400, 그 외에는 200과 세션 목록 JSON을 반환한다.
     /// </summary>
     private static IResult HandleSessions(
         string? month,
+        string? version,
         string? q,
         string? onlyIssues,
         string? sort,
@@ -319,6 +320,13 @@ public static class Program
         }
 
         List<SessionRow> sessions = summary.GetMonthSessions(month);
+        List<string> versions = sessions.Select(row => row.AppVersion).Distinct(StringComparer.Ordinal).ToList();
+        versions.Sort((a, b) => GameAnalytics.CompareVersions(b, a));
+
+        if (!string.IsNullOrEmpty(version))
+        {
+            sessions = sessions.Where(row => string.Equals(row.AppVersion, version, StringComparison.Ordinal)).ToList();
+        }
 
         if (!string.IsNullOrEmpty(q))
         {
@@ -340,7 +348,7 @@ public static class Program
             _ => sessions,
         };
 
-        return Results.Json(new SessionListResponse { Month = month, Count = sessions.Count, Sessions = sessions }, _jsonOptions);
+        return Results.Json(new SessionListResponse { Month = month, Count = sessions.Count, Versions = versions, Sessions = sessions }, _jsonOptions);
     }
 
     /// <summary>

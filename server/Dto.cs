@@ -216,6 +216,9 @@ public sealed class SessionListResponse
     /// <summary>필터를 통과한 세션 수.</summary>
     public int Count { get; set; }
 
+    /// <summary>그 달의 모든 앱 버전(필터 전, 최신 버전부터). 버전 필터 선택지에 쓴다.</summary>
+    public List<string> Versions { get; set; } = new();
+
     /// <summary>세션 목록.</summary>
     public List<SessionRow> Sessions { get; set; } = new();
 }
