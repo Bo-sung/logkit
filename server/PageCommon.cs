@@ -671,7 +671,7 @@ function assignColors() {
   const used = new Set(Object.values(state.colorOf));
   for (const ver of state.selected) {
     if (state.colorOf[ver]) continue;
-    const slot = PALETTE.find((c) => !used.has(c));
+    const slot = SERIES.find((c) => !used.has(c));
     state.colorOf[ver] = slot; used.add(slot);
   }
 }
