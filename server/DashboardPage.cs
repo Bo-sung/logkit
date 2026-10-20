@@ -17,9 +17,9 @@ public static class DashboardPage
 <title>LogKit GM</title>
 <style>
 :root {
-  --bg: var(--bg); --panel: var(--panel); --border: var(--border); --text: var(--text);
-  --muted: var(--muted); --accent: #58a6ff; --ok: var(--ok); --warn: var(--warn);
-  --err: var(--bad); --exc: var(--exc);
+  --bg: #0f1115; --panel: #1a1d24; --border: #2a2e37; --text: #e6edf3;
+  --muted: #8b949e; --accent: #4f8cff; --ok: #3fb950; --warn: #d29922;
+  --err: #f85149; --exc: #bc8cff;
 }
 * { box-sizing: border-box; }
 body { margin: 0; background: var(--bg); color: var(--text);
@@ -56,18 +56,18 @@ th, td { padding: 5px 10px; text-align: left; border-bottom: 1px solid var(--bor
 th { position: sticky; top: 0; background: var(--panel); color: var(--muted); font-weight: 600; z-index: 1; }
 tbody tr.click { cursor: pointer; }
 tbody tr.click:hover { background: var(--panel); }
-tbody tr.sel { background: var(--panel); }
+tbody tr.sel { background: rgba(79, 140, 255, .12); }
 td.msg { white-space: normal; max-width: 560px; overflow: hidden; text-overflow: ellipsis; }
 td.id { color: var(--muted); font-family: Consolas, monospace; font-size: 12px; }
 .lv { display: inline-block; min-width: 58px; text-align: center; border-radius: 4px;
   font-size: 11px; font-weight: 600; padding: 1px 6px; }
-.lv.info { background: var(--muted); color: var(--muted); }
-.lv.warning { background: var(--warn); color: var(--warn); }
-.lv.error, .lv.assert { background: var(--bad); color: var(--err); }
-.lv.exception { background: var(--exc); color: var(--exc); }
+.lv.info { background: rgba(139, 148, 158, .15); color: var(--muted); }
+.lv.warning { background: rgba(210, 153, 34, .15); color: var(--warn); }
+.lv.error, .lv.assert { background: rgba(248, 81, 73, .15); color: var(--err); }
+.lv.exception { background: rgba(188, 140, 255, .15); color: var(--exc); }
 .badge { border-radius: 4px; font-size: 11px; padding: 1px 6px; }
-.badge.ok { background: var(--ok); color: var(--ok); }
-.badge.crash { background: var(--bad); color: var(--err); }
+.badge.ok { background: rgba(63, 185, 80, .15); color: var(--ok); }
+.badge.crash { background: rgba(248, 81, 73, .15); color: var(--err); }
 .badge.ed { background: var(--panel); color: var(--accent); }
 tr.xrow td { background: var(--bg); white-space: normal; }
 tr.xrow pre { margin: 4px 0; padding: 8px; background: var(--panel); border: 1px solid var(--border);

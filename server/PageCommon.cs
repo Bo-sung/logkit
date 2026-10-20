@@ -9,11 +9,11 @@ public static class PageCommon
     /// <summary>공통 CSS(어두운 표면 토큰, 카드, 표, 차트, 툴팁).</summary>
     public const string Css = """
 :root {
-  --bg: #0f1115; --panel: #1a1d24; --border: #2a2e37; --grid: #2a2e37;
+  --bg: #0f1115; --panel: #1a1d24; --border: #2a2e37; --grid: #2a2e37; --axis: #3a3f4a;
   --text: #e6edf3; --muted: #8b949e;
   --series: #4f8cff, #34d399, #fbbf24, #f87171, #a78bfa, #22d3ee;
   --ok: #3fb950; --warn: #d29922; --bad: #f85149; --exc: #bc8cff;
-  --accent: var(--c0);
+  --accent: #4f8cff;
 }
 body { margin: 0; background: var(--bg); color: var(--text);
   font: 13px/1.5 system-ui, "Malgun Gothic", sans-serif; }
