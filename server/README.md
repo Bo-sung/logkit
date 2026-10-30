@@ -36,7 +36,6 @@ dotnet run        # http://0.0.0.0:5000 에서 대기
 | RawRetentionDays | 90 | raw 보존 일수. 기동 시 경과분을 삭제 |
 | TrashRetentionDays | 7 | 휴지통 보관 일수. 기동 직후와 매시간 확인해 삭제한 지 이만큼 지난 세션을 영구 삭제(0 이하면 자동 삭제 안 함) |
 | InboxProcessIntervalSeconds | 2 | 업로드가 오면 이만큼 더 기다렸다가 그사이 도착분까지 한 번에 처리 |
-| AnalyticsUrl | `http://localhost:5001` | 대시보드 상단의 분석 페이지 링크가 가리킬 분석 서버 주소 |
 | DerivedMetrics | (공격 명중률 1건) | 파생 지표 규칙. 분자·분모 지표 키의 몫을 계산한다. 키는 클라이언트 `GameLogger.Count`의 key와 일치 |
 
 ```json

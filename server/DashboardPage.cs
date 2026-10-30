@@ -92,10 +92,6 @@ nav.pages b { color: var(--text); font-weight: 600; }
   <div class="brand">LOGKIT<span>GM TOOL</span></div>
   <nav class="pages">
     <b>GM 툴(세션별 로그)</b>
-    <a href="__ANALYTICS_URL__/analytics">버전 통계</a>
-    <a href="__ANALYTICS_URL__/weapons">총기 통계</a>
-    <a href="__ANALYTICS_URL__/insights">가설 통계</a>
-    <a href="__ANALYTICS_URL__/replay">습격 리플레이</a>
   </nav>
   <div id="status" class="status">API 키를 입력하고 연결하세요.</div>
   <span class="spacer"></span>

@@ -20,9 +20,4 @@ public sealed class ServerOptions : StorageOptions
 
     /// <summary>두 지표의 몫으로 계산하는 파생 지표 목록(공격 명중률 등). 비어 있으면 계산하지 않는다.</summary>
     public List<DerivedMetricOptions> DerivedMetrics { get; set; } = new();
-
-    /// <summary>
-    /// 대시보드 상단의 분석 페이지 링크가 가리킬 분석 서버 주소. 게임별 분석 서버를 띄운 주소로 맞춘다.
-    /// </summary>
-    public string AnalyticsUrl { get; set; } = "http://localhost:5001";
 }

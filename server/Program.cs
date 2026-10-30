@@ -139,12 +139,11 @@ public static class Program
 
     /// <summary>
     /// GET /dashboard 처리기. 브라우저 로그 열람 대시보드 HTML을 돌려준다.
-    /// 상단 분석 페이지 링크는 설정한 AnalyticsUrl로 채운다. 200 상태와 text/html 본문을 반환한다.
+    /// 입력값은 없으며 200 상태와 text/html 본문을 반환한다.
     /// </summary>
-    private static IResult HandleDashboard(ServerOptions options)
+    private static IResult HandleDashboard()
     {
-        string html = DashboardPage.Html.Replace("__ANALYTICS_URL__", options.AnalyticsUrl.TrimEnd('/'), StringComparison.Ordinal);
-        return Results.Content(html, "text/html; charset=utf-8");
+        return Results.Content(DashboardPage.Html, "text/html; charset=utf-8");
     }
 
     /// <summary>
