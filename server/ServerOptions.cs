@@ -6,8 +6,19 @@ namespace LogServer;
 /// </summary>
 public sealed class ServerOptions : StorageOptions
 {
-    /// <summary>X-Api-Key 헤더와 비교할 키. 클라이언트 Api Key와 분석 서버의 IngestApiKey도 이 값과 맞춘다.</summary>
+    /// <summary>
+    /// 관리 키. 삭제·복원 등 데이터를 바꾸는 호출에 쓰며, 역할 키를 비우면 조회·업로드 키로도 쓰인다(예전 단일 키 설정과 같은 동작).
+    /// </summary>
     public string ApiKey { get; set; } = "dev-log-key";
+
+    /// <summary>열람 키. GM 툴과 분석 서버(내보내기 호출)가 쓴다. 비우면 ApiKey를 쓴다.</summary>
+    public string ReadApiKey { get; set; } = string.Empty;
+
+    /// <summary>업로드 키. 게임 클라이언트(GameLogger)가 POST /api/logs에 쓴다. 비우면 ApiKey를 쓴다.</summary>
+    public string UploadApiKey { get; set; } = string.Empty;
+
+    /// <summary>설정된 역할별 키를 인증 미들웨어용 묶음으로 만든다.</summary>
+    public ApiKeys ToApiKeys() => new(ApiKey, ReadApiKey, UploadApiKey);
 
     /// <summary>gzip 수신 본문 상한(바이트). 초과 시 413.</summary>
     public long MaxBodyBytes { get; set; } = 5242880L;

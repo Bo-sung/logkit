@@ -29,7 +29,9 @@ dotnet run        # http://0.0.0.0:5000 에서 대기
 | 키 | 기본값 | 설명 |
 | --- | --- | --- |
 | Urls | `http://0.0.0.0:5000` | 대기 주소 |
-| ApiKey | `dev-log-key` | 클라이언트 `Api Key`와 일치해야 한다. 분석 서버의 `IngestApiKey`도 같은 값. 비어 있으면 `/api` 요청을 전부 401로 거부 |
+| ApiKey | `dev-log-key` | 관리 키. 삭제·복원·맵 등록 등 데이터를 바꾸는 호출에 쓴다. 읽기·업로드 키를 비우면 조회·업로드에도 쓰인다(예전 단일 키 설정과 같은 동작). 비어 있으면 `/api`를 전부 401로 거부 |
+| ReadApiKey | (비움) | 열람 키. GM 툴과 분석 서버(내보내기)가 쓴다. 조회만 허용하고 변경 호출은 403. 비우면 ApiKey |
+| UploadApiKey | (비움) | 업로드 키. 게임 클라이언트(GameLogger)의 `Api Key`와 맞춘다. `POST /api/logs`만 허용. 비우면 ApiKey |
 | DataPath | `data` | CSV·raw 저장 루트(프로세스 작업 디렉터리 기준, 상시 운영 시 절대 경로 권장) |
 | MaxBodyBytes | 5242880 | gzip 본문 상한(초과 시 413) |
 | KeepRawJsonl | true | 수신 원문을 `data/raw/`에 보존할지 여부 |
@@ -71,9 +73,7 @@ dotnet run        # http://0.0.0.0:5000 에서 대기
 | `GET /api/export/sessions/{id}/meta` | 필요 | 200 JSON | 분석 서버용 세션 메타(앱 버전·플랫폼·시작/종료 시각) |
 | `GET /api/export/sessions/{id}/metrics` | 필요 | 200 `text/csv` | 분석 서버용 세션 지표 CSV |
 
-인증은 `X-Api-Key` 헤더 하나다. 브라우저 다운로드 링크처럼 헤더를 붙일 수 없는 요청은 `?key=API키` 쿼리로 대신할 수 있다. `/health`와 `/dashboard` 페이지 자체는 예외고, 대시보드가 부르는 `/api` 호출은 전부 검사한다.
-
-인증은 `X-Api-Key` 헤더 하나다. 브라우저 다운로드 링크처럼 헤더를 붙일 수 없는 요청은 `?key=API키` 쿼리로 대신할 수 있다. `/health`와 `/dashboard` 페이지 자체는 예외고, 대시보드가 부르는 `/api` 호출은 전부 검사한다.
+인증은 `X-Api-Key` 헤더 하나다. 키는 역할별로 나뉜다: 업로드 키는 `POST /api/logs`만, 열람 키는 조회·내보내기만, 관리 키는 나머지 변경 호출까지 쓸 수 있다. 키가 맞지 않으면 401, 키는 맞지만 역할이 모자라면 403이다. 브라우저 다운로드 링크처럼 헤더를 붙일 수 없는 요청은 `?key=API키` 쿼리로 대신할 수 있다. `/health`와 `/dashboard` 페이지 자체는 예외고, 대시보드가 부르는 `/api` 호출은 전부 검사한다.
 
 ```bash
 # 월 목록과 세션 검색

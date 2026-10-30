@@ -52,7 +52,7 @@ public static class Program
         WebApplication app = builder.Build();
 
         app.UseResponseCompression();
-        app.UseMiddleware<ApiKeyAuth>(options.ApiKey);
+        app.UseMiddleware<ApiKeyAuth>(options.ToApiKeys());
         app.MapGet("/", () => Results.Redirect("/dashboard"));
         app.MapGet("/dashboard", HandleDashboard);
         app.MapPost("/api/logs", HandleUploadAsync);
@@ -507,6 +507,10 @@ public static class Program
         if (string.IsNullOrEmpty(options.ApiKey))
         {
             logger.LogWarning("ApiKey가 비어 있어 /api 경로가 모든 요청을 401으로 거부합니다");
+        }
+        else if (string.IsNullOrEmpty(options.ReadApiKey) || string.IsNullOrEmpty(options.UploadApiKey))
+        {
+            logger.LogInformation("읽기·업로드 키가 비어 있어 관리 키로 대신합니다(단일 키 설정)");
         }
 
         logger.LogInformation(
