@@ -22,7 +22,14 @@
   </ItemGroup>
 
   <ItemGroup>
-    <ProjectReference Include="../../core/LogKit.Core.csproj" />
+    <!-- 공용 코어는 core 서브모듈의 프로젝트로 참조하므로 이 프로젝트의 소스에서는 뺀다 -->
+    <Compile Remove="core/**" />
+    <Content Remove="core/**" />
+    <None Remove="core/**" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="core/LogKit.Core.csproj" />
   </ItemGroup>
 
 </Project>

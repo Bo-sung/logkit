@@ -16,7 +16,6 @@ public static class GameConfig
     public static Dictionary<string, string> Events { get; private set; } = new(StringComparer.Ordinal);
     public static List<string> RaidEnds { get; private set; } = new();
     public static List<RaidStage> Stages { get; private set; } = new();
-    private static bool _loaded;
 
     public static void Load(string serverRoot)
     {
@@ -36,7 +35,6 @@ public static class GameConfig
 
         Stages = ParseStages(File.ReadAllText(stagesPath));
 
-        _loaded = true;
     }
 
     public static string Category(string key) => Categories[key];

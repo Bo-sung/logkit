@@ -1,6 +1,16 @@
 # GGGG 분석 서버
 
-GGGG 게임 전용 분석 서버. 공통 수신 서버(`server/`)의 내보내기 API에서 세션 로그를 주기적으로 복사해 미러(`data/`)에 쌓고,
+## 저장소 구성
+
+이 저장소는 공용 코어를 서브모듈 `core/`(LogKit Core 저장소)로 참조한다. 받을 때는 서브모듈도 함께 받는다.
+
+```bash
+git clone --recurse-submodules <이 저장소 URL>
+# 이미 받은 경우
+git submodule update --init --recursive
+```
+
+GGGG 게임 전용 분석 서버. 공통 수신 서버(LogKit 저장소의 `server/`)의 내보내기 API에서 세션 로그를 주기적으로 복사해 미러(`data/`)에 쌓고,
 그 사본으로 버전 통계·가설 통계·총기 통계·습격 리플레이를 계산한다. 두 서버는 HTTP로만 이야기하므로 따로 배포·재시작한다.
 
 ## 실행
@@ -8,7 +18,6 @@ GGGG 게임 전용 분석 서버. 공통 수신 서버(`server/`)의 내보내�
 요구사항: .NET 8 SDK. 수신 서버가 떠 있어야 최신 세션을 받는다(꺼져 있으면 마지막 미러로 계속 응답).
 
 ```bash
-cd analytics/gggg
 dotnet run        # http://0.0.0.0:5001 에서 대기
 ```
 
