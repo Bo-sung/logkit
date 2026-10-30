@@ -6,8 +6,7 @@
 logkit/
 ├─ package/   유니티 패키지 (UPM). 다른 프로젝트에서 git URL로 설치한다.
 ├─ server/                 공통 로그 수신 서버 (ASP.NET Core 8, 의존성 없음)
-│  ├─ core/                수신·분석 서버가 함께 쓰는 저장 코어 라이브러리
-│  └─ analytics/gggg/      GGGG 게임 전용 분석 서버 (수신 서버에서 로그를 복사해 분석)
+│  └─ core/                수신·분석 서버가 함께 쓰는 저장 코어 (서브모듈 자리, 별도 저장소)
 └─ README.md
 ```
 
@@ -74,17 +73,17 @@ GameLogger.Measure("RunDuration", 5); // 값 기록(횟수 + 합계 → 평균 �
 
 ## 수신 서버 · 분석 서버 실행
 
-수신 서버(`server/`, 공통)와 게임별 분석 서버(`server/analytics/<게임>`)는 따로 실행한다. 분석 서버는 수신 서버의 내보내기 API를 주기적으로 읽어 세션을 자기 미러로 복사한다.
+수신 서버(`server/`, 공통)와 게임별 분석 서버(별도 저장소, 예: GGGG 분석 서버)는 따로 실행한다. 분석 서버는 수신 서버의 내보내기 API를 주기적으로 읽어 세션을 자기 미러로 복사한다.
 
 ```bash
 cd server
 dotnet run            # 수신 서버 http://0.0.0.0:5000, 데이터는 server/data/
 
-cd server/analytics/gggg
-dotnet run            # GGGG 분석 서버 http://0.0.0.0:5001, 미러는 analytics/gggg/data/
+cd <GGGG 분석 서버 저장소>   # git clone --recurse-submodules 로 받는다
+dotnet run            # GGGG 분석 서버 http://0.0.0.0:5001, 미러는 저장소의 data/
 ```
 
-수신 서버 자세한 내용은 `server/README.md`, 분석 서버는 `server/analytics/gggg/README.md`.
+수신 서버 자세한 내용은 `server/README.md`, 분석 서버는 GGGG 분석 서버 저장소의 README를 본다.
 
 설정은 `server/appsettings.json`:
 
@@ -99,7 +98,7 @@ dotnet run            # GGGG 분석 서버 http://0.0.0.0:5001, 미러는 analyt
 
 ### 열람 — 대시보드와 API
 
-`http://서버주소/`를 열면 GM툴 형태의 열람 화면이 나온다(API 키 입력 필요). 월별 세션 목록, 레벨·카테고리·텍스트 검색, 항목 펼치기(메시지·데이터·스택), CSV/raw 내려받기, 세션·월 삭제를 지원한다. 버전·총기·가설·리플레이 통계는 게임별 분석 서버(`analytics/gggg`, 기본 `http://localhost:5001`)에서 본다. 같은 기능은 전부 API로도 제공한다:
+`http://서버주소/`를 열면 GM툴 형태의 열람 화면이 나온다(API 키 입력 필요). 월별 세션 목록, 레벨·카테고리·텍스트 검색, 항목 펼치기(메시지·데이터·스택), CSV/raw 내려받기, 세션·월 삭제를 지원한다. 버전·총기·가설·리플레이 통계는 게임별 분석 서버(GGGG 분석 서버, 기본 `http://localhost:5001`)에서 본다. 같은 기능은 전부 API로도 제공한다:
 
 | 엔드포인트 | 인증 | 설명 |
 | --- | --- | --- |

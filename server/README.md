@@ -13,7 +13,7 @@ Count/Measure 지표 → sessions/{id}.metrics.csv 저장 → 세션·월 단위
 분석 서버 → /api/export/* 로 세션 복사 → 게임별 분석(버전·가설·총기·리플레이)
 ```
 
-구성: `server/` (이 서버, 실행 프로젝트) · `core/` (세션 저장 형식·파서·인증을 담은 공용 라이브러리) · `analytics/<게임>/` (게임별 분석 서버).
+구성: `server/` (이 서버, 실행 프로젝트) · `core/` (세션 저장 형식·파서·인증을 담은 공용 라이브러리, 별도 저장소 LogKit Core의 서브모듈 자리). 게임별 분석 서버는 별도 저장소(GGGG 분석 서버)다.
 
 ## 실행
 
@@ -45,7 +45,7 @@ dotnet run        # http://0.0.0.0:5000 에서 대기
 ]
 ```
 
-이 서버는 게임 규칙을 모른다. 버전·습격·총기 같은 게임 통계는 게임별 분석 서버(`analytics/gggg`, 자세한 내용은 `analytics/gggg/README.md`)가 맡는다.
+이 서버는 게임 규칙을 모른다. 버전·습격·총기 같은 게임 통계는 게임별 분석 서버(별도 저장소)가 맡는다.
 
 ## 엔드포인트
 
@@ -67,10 +67,6 @@ dotnet run        # http://0.0.0.0:5000 에서 대기
 | `DELETE /api/trash` | 필요 | 200 JSON | 휴지통 비우기 |
 | `GET /api/summary/{yyyy-MM}.csv` | 필요 | 200 `text/csv` | 월별 요약 CSV 다운로드(없거나 형식이 틀리면 404) |
 | `GET /dashboard` | 불필요 | 200 `text/html` | 브라우저 열람 대시보드. `/`는 `/dashboard`로 리디렉션 |
-| `GET /analytics` | 불필요 | 200 `text/html` | 버전별 누적 통계 페이지 |
-| `GET /weapons` | 불필요 | 200 `text/html` | 버전별 총기 모딩 통계 페이지 |
-| `GET /insights` | 불필요 | 200 `text/html` | 가설·일반 통계 페이지 |
-| `GET /replay` | 불필요 | 200 `text/html` | 야간 습격 고스트 리플레이 페이지 |
 | `GET /api/export/index` | 필요 | 200 JSON | 분석 서버용 세션 목록. 세션 ID와 마지막 변경 시각(updatedUtc, 통합 CSV·메타·지표 중 가장 늦은 시각) |
 | `GET /api/export/sessions/{id}/csv` | 필요 | 200 `text/csv` | 분석 서버용 세션 통합 CSV |
 | `GET /api/export/sessions/{id}/meta` | 필요 | 200 JSON | 분석 서버용 세션 메타(앱 버전·플랫폼·시작/종료 시각) |
@@ -172,4 +168,4 @@ curl -H "X-Api-Key: dev-log-key" http://localhost:5000/api/summary/2026-10.csv
 
 분석 서버는 이 서버의 `GET /api/export/index`를 주기적으로 읽어, 바뀐 세션의 CSV·메타·지표만 자기 미러로 복사한다.
 수신 서버는 분석 서버의 존재를 알지 못하며, 같은 내보내기 API를 여러 분석 서버가 함께 읽어도 된다.
-분석 서버 구성은 `analytics/gggg/README.md`를 본다.
+분석 서버 구성은 GGGG 분석 서버 저장소의 README를 본다.

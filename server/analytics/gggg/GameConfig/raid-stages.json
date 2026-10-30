@@ -1,8 +1,0 @@
-[
-  { "Scene": "Tutorial_WoodenHouse", "Name": "튜토리얼 목조주택", "Vault": 1 },
-  { "Scene": "NightRaid_WoodenHouse", "Name": "목조주택", "Vault": 1 },
-  { "Scene": "NightRaid_BankGrand", "Name": "은행", "Vault": 3 },
-  { "Scene": "NightRaid_JungleCampus", "Name": "정글 캠퍼스", "Vault": 1 },
-  { "Scene": "NightRaid_Millitary_base", "Name": "군사기지", "Vault": 1 },
-  { "Scene": "NightRaid_JungleCampus_improve", "Name": "정글 캠퍼스 (개선)", "Vault": 1 }
-]

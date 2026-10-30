@@ -2,7 +2,7 @@
 
   <!--
     공통 로그 수신 서버(ingest). 업로드 수신·저장·GM툴 열람·휴지통·분석 서버용 내보내기 API를 담당한다.
-    저장 코드는 core/LogKit.Core 프로젝트를, 게임별 분석은 analytics/* 프로젝트를 따로 빌드한다.
+    저장 코드는 core/LogKit.Core 프로젝트를 쓴다. 게임별 분석 서버는 별도 저장소(GGGG 분석 서버)에서 관리한다.
   -->
   <PropertyGroup>
     <TargetFramework>net8.0</TargetFramework>
@@ -15,10 +15,10 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <!-- core와 analytics는 각자 프로젝트이므로 이 프로젝트의 소스에서 제외한다 -->
-    <Compile Remove="core/**;analytics/**" />
-    <Content Remove="core/**;analytics/**" />
-    <None Remove="core/**;analytics/**" />
+    <!-- core는 별도 프로젝트이므로 이 프로젝트의 소스에서 제외한다 -->
+    <Compile Remove="core/**" />
+    <Content Remove="core/**" />
+    <None Remove="core/**" />
   </ItemGroup>
 
   <ItemGroup>
