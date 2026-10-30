@@ -28,7 +28,7 @@ dotnet run        # http://0.0.0.0:5001 에서 대기
 | Urls | `http://0.0.0.0:5001` | 대기 주소 |
 | ApiKey | `dev-log-key` | 분석 페이지와 `/api` 호출이 요구하는 키 |
 | IngestUrl | `http://localhost:5000` | 세션을 복사해 올 수신 서버 주소 |
-| IngestApiKey | `dev-log-key` | 수신 서버의 `ApiKey`와 같아야 한다 |
+| IngestApiKey | `dev-log-key` | 수신 서버의 열람 키(`ReadApiKey`)와 맞춘다. 읽기만 하므로 열람 키면 충분하다 |
 | SyncIntervalSeconds | 60 | 수신 서버 세션 목록을 다시 확인하는 간격(5초 이상) |
 | IngestTimeoutSeconds | 120 | 수신 서버 요청 한 번의 제한 시간 |
 | GmToolUrl | `http://localhost:5000/dashboard` | 분석 페이지 머리글의 "GM 툴" 링크 주소. 브라우저가 열 수 있는 주소(사내망이면 `172.21.10.67`)로 맞춘다 |
@@ -62,7 +62,6 @@ dotnet run        # http://0.0.0.0:5001 에서 대기
 
 인증은 `X-Api-Key` 헤더 하나다. 브라우저 다운로드 링크처럼 헤더를 붙일 수 없는 요청은 `?key=API키` 쿼리로 대신할 수 있다. `/health`와 `/dashboard` 페이지 자체는 예외고, 대시보드가 부르는 `/api` 호출은 전부 검사한다.
 
-인증은 `X-Api-Key` 헤더 하나다. 브라우저 다운로드 링크처럼 헤더를 붙일 수 없는 요청은 `?key=API키` 쿼리로 대신할 수 있다. `/health`와 `/dashboard` 페이지 자체는 예외고, 대시보드가 부르는 `/api` 호출은 전부 검사한다.
 
 ## 버전별 누적 통계 (/analytics)
 

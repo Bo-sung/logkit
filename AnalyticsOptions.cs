@@ -20,7 +20,7 @@ public sealed class AnalyticsOptions : StorageOptions
     /// <summary>복사해 올 수신 서버 주소(예: http://localhost:5000).</summary>
     public string IngestUrl { get; set; } = "http://localhost:5000";
 
-    /// <summary>수신 서버 API 키. 수신 서버의 ApiKey와 같아야 한다.</summary>
+    /// <summary>수신 서버의 열람 키(ReadApiKey). 세션 목록과 파일을 읽기만 하므로 열람 키면 충분하다.</summary>
     public string IngestApiKey { get; set; } = "dev-log-key";
 
     /// <summary>수신 서버에서 세션 목록을 다시 확인하는 간격(초).</summary>

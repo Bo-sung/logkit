@@ -58,7 +58,7 @@ public static class Program
         WebApplication app = builder.Build();
 
         app.UseResponseCompression();
-        app.UseMiddleware<ApiKeyAuth>(options.ApiKey);
+        app.UseMiddleware<ApiKeyAuth>(new ApiKeys(options.ApiKey));
         app.MapGet("/", () => Results.Redirect("/analytics"));
         app.MapGet("/health", () => Results.Text("ok", "text/plain"));
         app.MapGet("/api/mirror/status", (IngestMirror mirror) => Results.Json(mirror.Status, _jsonOptions));
