@@ -417,49 +417,61 @@ public sealed class CsvSessionStore
     }
 
     /// <summary>
-    /// 통합 CSV가 있는 세션 ID 목록을 돌려준다. 파트 파일과 지표 파일은 세션 자체가 아니므로 뺀다.
-    /// 저장소 폴더를 훑으며 ID 형식이 맞지 않는 파일은 무시한다.
+    /// 통합 CSV가 있는 모든 세션의 마지막 변경 시각(UTC)을 한 번에 구한다.
+    /// sessions 폴더를 한 번만 훑어 통합 CSV·메타·지표·파트 파일 중 가장 늦은 수정 시각을 세션별로 모은다.
+    /// 세션마다 폴더를 다시 훑으면 세션 수만큼 느려지므로, 목록을 만들 때는 이 메서드를 쓴다.
     /// </summary>
-    public List<string> ListSessionIds()
+    public Dictionary<string, DateTime> ListSessionChanges()
     {
-        List<string> ids = new();
+        Dictionary<string, DateTime> latest = new(StringComparer.Ordinal);
         if (!Directory.Exists(SessionsDirectory))
         {
-            return ids;
+            return latest;
         }
 
-        foreach (string path in Directory.EnumerateFiles(SessionsDirectory, "*.csv"))
+        HashSet<string> withCsv = new(StringComparer.Ordinal);
+        Dictionary<string, DateTime> touched = new(StringComparer.Ordinal);
+        foreach (string path in Directory.EnumerateFiles(SessionsDirectory))
         {
             string file = Path.GetFileName(path);
-            if (_partFilePattern.IsMatch(file) || file.EndsWith(".metrics.csv", StringComparison.Ordinal))
+            string id;
+            if (file.EndsWith(".metrics.csv", StringComparison.Ordinal))
+            {
+                id = file[..^".metrics.csv".Length];
+            }
+            else if (file.EndsWith(".meta.json", StringComparison.Ordinal))
+            {
+                id = file[..^".meta.json".Length];
+            }
+            else if (_partFilePattern.Match(file) is { Success: true } part)
+            {
+                id = part.Groups["id"].Value;
+            }
+            else if (file.EndsWith(".csv", StringComparison.Ordinal))
+            {
+                id = file[..^".csv".Length];
+                withCsv.Add(id);
+            }
+            else
             {
                 continue;
             }
 
-            string id = Path.GetFileNameWithoutExtension(file);
-            if (IsValidSessionId(id))
+            if (!IsValidSessionId(id))
             {
-                ids.Add(id);
+                continue;
+            }
+
+            DateTime written = File.GetLastWriteTimeUtc(path);
+            if (!touched.TryGetValue(id, out DateTime known) || written > known)
+            {
+                touched[id] = written;
             }
         }
 
-        return ids;
-    }
-
-    /// <summary>
-    /// 세션 파일(통합 CSV·메타·지표·파트) 중 가장 늦게 바뀐 시각을 UTC로 돌려준다.
-    /// sessionId를 입력으로 사용하며 파일이 하나도 없으면 null을 반환한다.
-    /// </summary>
-    public DateTime? LastChangedUtc(string sessionId)
-    {
-        DateTime? latest = null;
-        foreach ((_, string path) in SessionFiles(sessionId))
+        foreach (string id in withCsv)
         {
-            DateTime written = File.GetLastWriteTimeUtc(path);
-            if (latest is null || written > latest)
-            {
-                latest = written;
-            }
+            latest[id] = touched[id];
         }
 
         return latest;
