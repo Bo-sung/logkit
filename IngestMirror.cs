@@ -119,19 +119,19 @@ public sealed class IngestMirror : BackgroundService
         int updated = 0;
         int removed = 0;
 
-        foreach (string local in _store.ListSessionIds())
+        Dictionary<string, DateTime> local = _store.ListSessionChanges();
+        foreach (string localId in local.Keys)
         {
-            if (!remote.ContainsKey(local))
+            if (!remote.ContainsKey(localId))
             {
-                RemoveLocal(local);
+                RemoveLocal(localId);
                 removed++;
             }
         }
 
         foreach ((string sessionId, DateTime changedUtc) in remote)
         {
-            DateTime? have = _store.LastChangedUtc(sessionId);
-            if (have is not null && Math.Abs((have.Value - changedUtc).TotalSeconds) < 1)
+            if (local.TryGetValue(sessionId, out DateTime have) && Math.Abs((have - changedUtc).TotalSeconds) < 1)
             {
                 continue;
             }
