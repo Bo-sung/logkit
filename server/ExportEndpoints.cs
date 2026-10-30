@@ -26,18 +26,12 @@ public static class ExportEndpoints
     private static IResult HandleIndex(CsvSessionStore store)
     {
         List<ExportIndexItem> sessions = new();
-        foreach (string sessionId in store.ListSessionIds())
+        foreach ((string sessionId, DateTime updated) in store.ListSessionChanges())
         {
-            DateTime? updated = store.LastChangedUtc(sessionId);
-            if (updated is null)
-            {
-                continue;
-            }
-
             sessions.Add(new ExportIndexItem
             {
                 SessionId = sessionId,
-                UpdatedUtc = DateTime.SpecifyKind(updated.Value, DateTimeKind.Utc).ToString("O", System.Globalization.CultureInfo.InvariantCulture),
+                UpdatedUtc = DateTime.SpecifyKind(updated, DateTimeKind.Utc).ToString("O", System.Globalization.CultureInfo.InvariantCulture),
             });
         }
 
