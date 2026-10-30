@@ -63,10 +63,10 @@ public static class Program
         app.MapGet("/health", () => Results.Text("ok", "text/plain"));
         app.MapGet("/api/mirror/status", (IngestMirror mirror) => Results.Json(mirror.Status, _jsonOptions));
         app.MapGet("/api/months", HandleMonths);
-        app.MapGet("/analytics", HandleAnalyticsPage);
-        app.MapGet("/weapons", HandleWeaponsPage);
-        app.MapGet("/insights", HandleInsightsPage);
-        app.MapGet("/replay", () => Results.Content(ReplayPage.Html, "text/html; charset=utf-8"));
+        app.MapGet("/analytics", (AnalyticsOptions o) => Results.Content(PageHtml(AnalyticsPage.Html, o), "text/html; charset=utf-8"));
+        app.MapGet("/weapons", (AnalyticsOptions o) => Results.Content(PageHtml(WeaponsPage.Html, o), "text/html; charset=utf-8"));
+        app.MapGet("/insights", (AnalyticsOptions o) => Results.Content(PageHtml(InsightsPage.Html, o), "text/html; charset=utf-8"));
+        app.MapGet("/replay", (AnalyticsOptions o) => Results.Content(PageHtml(ReplayPage.Html, o), "text/html; charset=utf-8"));
         app.MapGet("/api/analytics", HandleAnalytics);
         app.MapGet("/api/analytics/weapons", HandleWeaponAnalytics);
         app.MapGet("/api/analytics/insights", HandleInsights);
@@ -99,15 +99,6 @@ public static class Program
     }
 
     /// <summary>
-    /// GET /analytics 처리기. 버전별 플레이 분석 페이지 HTML을 돌려준다.
-    /// 입력값은 없으며 200 상태와 text/html 본문을 반환한다.
-    /// </summary>
-    private static IResult HandleAnalyticsPage()
-    {
-        return Results.Content(AnalyticsPage.Html, "text/html; charset=utf-8");
-    }
-
-    /// <summary>
     /// GET /api/analytics 처리기. 게임 이벤트 로그를 버전별로 집계한 플레이 분석을 돌려준다.
     /// month(yyyy-MM, 생략 시 전체 월)와 excludeEditor(true면 에디터 세션 제외)를 사용하며
     /// month 형식이 틀리면 400, 그 외에는 200과 분석 JSON을 반환한다.
@@ -124,15 +115,6 @@ public static class Program
     }
 
     /// <summary>
-    /// GET /weapons 처리기. 버전별 총기 모딩 통계 페이지 HTML을 돌려준다.
-    /// 입력값은 없으며 200 상태와 text/html 본문을 반환한다.
-    /// </summary>
-    private static IResult HandleWeaponsPage()
-    {
-        return Results.Content(WeaponsPage.Html, "text/html; charset=utf-8");
-    }
-
-    /// <summary>
     /// GET /api/analytics/weapons 처리기. 작업대 퇴장·시험 사격 입력의 총기 코드를 버전별로 집계해 돌려준다.
     /// month(yyyy-MM, 생략 시 전체 월)와 excludeEditor(true면 에디터 세션 제외)를 사용하며
     /// month 형식이 틀리면 400, 그 외에는 200과 총기 집계 JSON을 반환한다.
@@ -146,15 +128,6 @@ public static class Program
 
         bool skipEditor = string.Equals(excludeEditor, "true", StringComparison.OrdinalIgnoreCase);
         return Results.Json(analytics.BuildWeapons(month, skipEditor), _jsonOptions);
-    }
-
-    /// <summary>
-    /// GET /insights 처리기. 가설·일반 통계 페이지 HTML을 돌려준다.
-    /// 입력값은 없으며 200 상태와 text/html 본문을 반환한다.
-    /// </summary>
-    private static IResult HandleInsightsPage()
-    {
-        return Results.Content(InsightsPage.Html, "text/html; charset=utf-8");
     }
 
     /// <summary>
@@ -255,6 +228,16 @@ public static class Program
     }
 
     /// <summary>
+    /// 페이지 머리글의 GM 툴 링크(/dashboard)를 설정한 GM 툴 주소로 바꾼다.
+    /// 분석 서버는 GM 툴과 다른 주소에서 뜨므로, 이 치환 없이는 링크가 분석 서버의 없는 경로를 가리킨다.
+    /// html과 options를 입력으로 사용하며 치환된 HTML을 반환한다.
+    /// </summary>
+    private static string PageHtml(string html, AnalyticsOptions options)
+    {
+        return html.Replace("href=\"/dashboard\"", "href=\"" + options.GmToolUrl + "\"", StringComparison.Ordinal);
+    }
+
+    /// <summary>
     /// GET /api/months 처리기. 요약 파일이 있는 월 목록과 월별 집계를 돌려준다.
     /// 입력값은 없으며 200 상태와 월 목록 JSON을 반환한다.
     /// </summary>
@@ -286,10 +269,10 @@ public static class Program
         string fileName = $"logkit-report-{m}-{savedAt}.html";
         var pages = new (string page, string label, string html, object data)[]
         {
-            ("/analytics", "버전 통계", AnalyticsPage.Html, analyticsData),
-            ("/weapons", "총기 통계", WeaponsPage.Html, weaponsData),
-            ("/insights", "가설 통계", InsightsPage.Html, insightsData),
-            ("/replay", "습격 리플레이", ReplayPage.Html, replayData),
+            ("/analytics", "버전 통계", PageHtml(AnalyticsPage.Html, options), analyticsData),
+            ("/weapons", "총기 통계", PageHtml(WeaponsPage.Html, options), weaponsData),
+            ("/insights", "가설 통계", PageHtml(InsightsPage.Html, options), insightsData),
+            ("/replay", "습격 리플레이", PageHtml(ReplayPage.Html, options), replayData),
         };
         string html = BuildCombinedReportHtml(m, savedAt, pages);
         byte[] bytes = System.Text.Encoding.UTF8.GetBytes(html);

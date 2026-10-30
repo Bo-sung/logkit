@@ -31,6 +31,7 @@ dotnet run        # http://0.0.0.0:5001 에서 대기
 | IngestApiKey | `dev-log-key` | 수신 서버의 `ApiKey`와 같아야 한다 |
 | SyncIntervalSeconds | 60 | 수신 서버 세션 목록을 다시 확인하는 간격(5초 이상) |
 | IngestTimeoutSeconds | 120 | 수신 서버 요청 한 번의 제한 시간 |
+| GmToolUrl | `http://localhost:5000/dashboard` | 분석 페이지 머리글의 "GM 툴" 링크 주소. 브라우저가 열 수 있는 주소(사내망이면 `172.21.10.67`)로 맞춘다 |
 | DataPath | `data` | 미러 저장소. 이 서버만 쓴다. 수신 서버의 `data`와 같은 폴더로 두지 않는다 |
 | WeaponCodeHmacKey | `WGG.weapon-code.v1.compact-integrity` | 총기 공유 코드 무결성 키(클라이언트와 맞춘 값) |
 
