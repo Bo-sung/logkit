@@ -3,10 +3,28 @@ using System.Globalization;
 namespace LogServer;
 
 /// <summary>
+/// 파생 지표 한 줄 설정. 분자·분모 지표 키의 몫을 name으로 제공한다.
+/// </summary>
+public sealed class DerivedMetricOptions
+{
+    /// <summary>파생 지표 이름(예: 공격 명중률).</summary>
+    public string Name { get; set; } = string.Empty;
+
+    /// <summary>분자 지표 키(예: AttackHit).</summary>
+    public string Numerator { get; set; } = string.Empty;
+
+    /// <summary>분모 지표 키(예: Attack).</summary>
+    public string Denominator { get; set; } = string.Empty;
+
+    /// <summary>표기 단위. 기본 %.</summary>
+    public string Unit { get; set; } = "%";
+}
+
+/// <summary>
 /// 플레이 지표 합산과 파생 지표 계산을 담당하는 헬퍼.
 /// 세션 상세와 월별 지표 API가 지표 파일과 설정된 파생 지표 규칙을 계산할 때 사용한다.
 /// </summary>
-internal static class MetricMath
+public static class MetricMath
 {
     /// <summary>
     /// 지표 샘플 목록을 키별 누적 맵으로 바꾼다.

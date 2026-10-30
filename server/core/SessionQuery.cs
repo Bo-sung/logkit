@@ -85,7 +85,7 @@ public sealed class SessionEntryCache
 /// 세션 CSV를 로그 항목 목록으로 읽고 조회 조건을 적용하는 질의 헬퍼.
 /// 대시보드와 조회 API가 항목 파싱과 필터링에 사용한다.
 /// </summary>
-internal static class SessionQuery
+public static class SessionQuery
 {
     private const int ENTRY_COLUMN_COUNT = 7;
 

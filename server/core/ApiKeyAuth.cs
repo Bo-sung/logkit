@@ -1,22 +1,24 @@
+using Microsoft.AspNetCore.Http;
+
 namespace LogServer;
 
 /// <summary>
-/// /api로 시작하는 요청에 X-Api-Key 헤더를 요구하는 인증 미들웨어.
-/// context의 헤더를 options.ApiKey와 비교하며, 불일치하면 401 응답으로 파이프라인을 중단한다.
+/// /api로 시작하는 요청에 X-Api-Key 헤더를 요구하는 인증 미들웨어. 수신 서버와 분석 서버가 함께 쓴다.
+/// 요청의 X-Api-Key 헤더(또는 key 쿼리)를 설정된 키와 비교하며, 불일치하면 401 응답으로 파이프라인을 중단한다.
 /// </summary>
 public sealed class ApiKeyAuth
 {
     private readonly RequestDelegate _next;
-    private readonly ServerOptions _options;
+    private readonly string _apiKey;
 
     /// <summary>
-    /// 다음 미들웨어와 서버 설정을 받아 인증 미들웨어를 만든다.
-    /// next와 options를 입력으로 사용하며 인스턴스 상태에 보관한다.
+    /// 다음 미들웨어와 기대하는 키를 받아 인증 미들웨어를 만든다.
+    /// next와 apiKey를 입력으로 사용하며 인스턴스 상태에 보관한다.
     /// </summary>
-    public ApiKeyAuth(RequestDelegate next, ServerOptions options)
+    public ApiKeyAuth(RequestDelegate next, string apiKey)
     {
         _next = next;
-        _options = options;
+        _apiKey = apiKey;
     }
 
     /// <summary>
@@ -35,7 +37,7 @@ public sealed class ApiKeyAuth
                 provided = context.Request.Query["key"].FirstOrDefault();
             }
 
-            if (string.IsNullOrEmpty(_options.ApiKey) || !string.Equals(provided, _options.ApiKey, StringComparison.Ordinal))
+            if (string.IsNullOrEmpty(_apiKey) || !string.Equals(provided, _apiKey, StringComparison.Ordinal))
             {
                 context.Response.StatusCode = StatusCodes.Status401Unauthorized;
                 await context.Response.WriteAsync("unauthorized");

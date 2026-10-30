@@ -5,7 +5,9 @@
 ```
 logkit/
 ├─ package/   유니티 패키지 (UPM). 다른 프로젝트에서 git URL로 설치한다.
-├─ server/    로그 수신 서버 (ASP.NET Core 8, 의존성 없음).
+├─ server/                 공통 로그 수신 서버 (ASP.NET Core 8, 의존성 없음)
+│  ├─ core/                수신·분석 서버가 함께 쓰는 저장 코어 라이브러리
+│  └─ analytics/gggg/      GGGG 게임 전용 분석 서버 (수신 서버에서 로그를 복사해 분석)
 └─ README.md
 ```
 
@@ -70,14 +72,19 @@ GameLogger.Measure("RunDuration", 5); // 값 기록(횟수 + 합계 → 평균 �
 - 파일 기록은 메인 스레드가 아닌 전용 워커 스레드가 담당한다. Update는 신호만 보낸다.
 - 대상 플랫폼: Windows 스탠드얼론(에디터 포함). WebGL은 스레드·동기 HTTP 제약으로 미지원
 
-## 수신 서버 실행 (server/)
+## 수신 서버 · 분석 서버 실행
 
-요구사항: .NET 8 SDK(빌드) 또는 ASP.NET Core 8 Runtime(실행만). 자세한 내용은 `server/README.md`.
+수신 서버(`server/`, 공통)와 게임별 분석 서버(`server/analytics/<게임>`)는 따로 실행한다. 분석 서버는 수신 서버의 내보내기 API를 주기적으로 읽어 세션을 자기 미러로 복사한다.
 
 ```bash
 cd server
-dotnet run            # http://0.0.0.0:5000 에서 대기, 데이터는 server/data/
+dotnet run            # 수신 서버 http://0.0.0.0:5000, 데이터는 server/data/
+
+cd server/analytics/gggg
+dotnet run            # GGGG 분석 서버 http://0.0.0.0:5001, 미러는 analytics/gggg/data/
 ```
+
+수신 서버 자세한 내용은 `server/README.md`, 분석 서버는 `server/analytics/gggg/README.md`.
 
 설정은 `server/appsettings.json`:
 
@@ -92,19 +99,15 @@ dotnet run            # http://0.0.0.0:5000 에서 대기, 데이터는 server/d
 
 ### 열람 — 대시보드와 API
 
-`http://서버주소/`를 열면 GM툴 형태의 열람 화면이 나온다(API 키 입력 필요). 월별 세션 목록, 레벨·카테고리·텍스트 검색, 항목 펼치기(메시지·데이터·스택), CSV/raw 내려받기, 세션·월 삭제를 지원한다. 같은 기능은 전부 API로도 제공한다:
+`http://서버주소/`를 열면 GM툴 형태의 열람 화면이 나온다(API 키 입력 필요). 월별 세션 목록, 레벨·카테고리·텍스트 검색, 항목 펼치기(메시지·데이터·스택), CSV/raw 내려받기, 세션·월 삭제를 지원한다. 버전·총기·가설·리플레이 통계는 게임별 분석 서버(`analytics/gggg`, 기본 `http://localhost:5001`)에서 본다. 같은 기능은 전부 API로도 제공한다:
 
 | 엔드포인트 | 인증 | 설명 |
 | --- | --- | --- |
 | `POST /api/logs` | 필요 | 업로드. 수신함에 저장 후 202 `{"queued":true}`. 처리는 백그라운드에서 몰아서 한다 |
 | `GET /health` | 불필요 | `ok` |
 | `GET /dashboard` | 불필요 | 열람 대시보드(`/` 리디렉션) |
-| `GET /analytics` | 불필요 | 버전별 누적 통계 페이지 |
-| `GET /api/analytics?month=` | 필요 | 같은 앱 버전의 모든 세션 로그를 합산한 누적 통계(`month` 생략 시 전체 기간, `excludeEditor=true`) |
-| `GET /weapons` | 불필요 | 버전별 총기 모딩 통계 페이지 |
-| `GET /api/analytics/weapons?month=` | 필요 | 총기 코드를 해석한 버전별 구성 합계(파츠 사용량·조합 계산용) |
-| `GET /insights` | 불필요 | 가설·일반 통계 페이지(일차별 수익·재도전·종결 총기 등) |
-| `GET /api/analytics/insights?month=` | 필요 | 세션별 일차·주문·습격 기록(가설 통계 계산용) |
+| `GET /api/export/index` | 필요 | 분석 서버용 세션 목록(ID·마지막 변경 시각) |
+| `GET /api/export/sessions/{id}/csv` · `/meta` · `/metrics` | 필요 | 분석 서버용 세션 파일 내려받기 |
 | `GET /api/months` | 필요 | 월 목록 + 월별 집계 |
 | `GET /api/sessions?month=` | 필요 | 세션 목록(`q`, `onlyIssues`, `sort`) |
 | `GET /api/sessions/{id}` | 필요 | 세션 상세(`levels`, `category`, `scene`, `q`, `offset`, `limit`) |

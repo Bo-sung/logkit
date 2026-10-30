@@ -20,10 +20,10 @@ public sealed class MapStore
         ["webp"] = "image/webp",
     };
 
-    private readonly ServerOptions _options;
+    private readonly StorageOptions _options;
     private readonly object _gate = new();
 
-    public MapStore(ServerOptions options)
+    public MapStore(StorageOptions options)
     {
         _options = options;
     }

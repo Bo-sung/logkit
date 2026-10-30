@@ -52,15 +52,15 @@ public sealed class CsvSessionStore
     private const string FILE_BASE_CAPTURE = "(?<id>[A-Za-z0-9][A-Za-z0-9._-]{0,63})";
 
     /// <summary>메타·지표 파일 직렬화에 쓰는 JSON 옵션.</summary>
-    internal static readonly JsonSerializerOptions JsonWeb = new(JsonSerializerDefaults.Web);
+    public static readonly JsonSerializerOptions JsonWeb = new(JsonSerializerDefaults.Web);
 
-    private readonly ServerOptions _options;
+    private readonly StorageOptions _options;
 
     /// <summary>
     /// 저장 경로 설정을 받아 저장소를 만든다.
     /// options의 DataPath를 사용하며 인스턴스 상태에 보관한다.
     /// </summary>
-    public CsvSessionStore(ServerOptions options)
+    public CsvSessionStore(StorageOptions options)
     {
         _options = options;
     }
@@ -389,6 +389,83 @@ public sealed class CsvSessionStore
     public bool HasSessionFiles(string sessionId) => SessionFiles(sessionId).Count > 0;
 
     /// <summary>
+    /// 세션의 sessions 폴더 파일(통합 CSV·메타·지표·파트)을 바로 지운다. 휴지통을 거치지 않으므로 분석 서버의 사본 정리에만 쓴다.
+    /// sessionId를 입력으로 사용하며 지운 파일 수를 반환한다.
+    /// </summary>
+    public int DeleteSessionFiles(string sessionId)
+    {
+        SemaphoreSlim gate = FileLocks.Get(MetaPath(sessionId));
+        gate.Wait();
+        try
+        {
+            int deleted = 0;
+            foreach ((string folder, string path) in SessionFiles(sessionId))
+            {
+                if (folder == "sessions" && File.Exists(path))
+                {
+                    File.Delete(path);
+                    deleted++;
+                }
+            }
+
+            return deleted;
+        }
+        finally
+        {
+            gate.Release();
+        }
+    }
+
+    /// <summary>
+    /// 통합 CSV가 있는 세션 ID 목록을 돌려준다. 파트 파일과 지표 파일은 세션 자체가 아니므로 뺀다.
+    /// 저장소 폴더를 훑으며 ID 형식이 맞지 않는 파일은 무시한다.
+    /// </summary>
+    public List<string> ListSessionIds()
+    {
+        List<string> ids = new();
+        if (!Directory.Exists(SessionsDirectory))
+        {
+            return ids;
+        }
+
+        foreach (string path in Directory.EnumerateFiles(SessionsDirectory, "*.csv"))
+        {
+            string file = Path.GetFileName(path);
+            if (_partFilePattern.IsMatch(file) || file.EndsWith(".metrics.csv", StringComparison.Ordinal))
+            {
+                continue;
+            }
+
+            string id = Path.GetFileNameWithoutExtension(file);
+            if (IsValidSessionId(id))
+            {
+                ids.Add(id);
+            }
+        }
+
+        return ids;
+    }
+
+    /// <summary>
+    /// 세션 파일(통합 CSV·메타·지표·파트) 중 가장 늦게 바뀐 시각을 UTC로 돌려준다.
+    /// sessionId를 입력으로 사용하며 파일이 하나도 없으면 null을 반환한다.
+    /// </summary>
+    public DateTime? LastChangedUtc(string sessionId)
+    {
+        DateTime? latest = null;
+        foreach ((_, string path) in SessionFiles(sessionId))
+        {
+            DateTime written = File.GetLastWriteTimeUtc(path);
+            if (latest is null || written > latest)
+            {
+                latest = written;
+            }
+        }
+
+        return latest;
+    }
+
+    /// <summary>
     /// 세션 파일을 targetRoot/sessions, targetRoot/raw 아래로 옮긴다(휴지통). 세션 잠금 안에서 옮기며 옮긴 파일 수를 반환한다.
     /// </summary>
     public int MoveSessionFiles(string sessionId, string targetRoot)
@@ -599,7 +676,7 @@ public sealed class CsvSessionStore
     /// ISO 8601 문자열을 UTC DateTime으로 해석한다.
     /// text를 입력으로 사용하며 성공 여부와 해석 결과를 반환한다.
     /// </summary>
-    internal static bool TryParseUtc(string? text, out DateTime value)
+    public static bool TryParseUtc(string? text, out DateTime value)
     {
         return DateTime.TryParse(
             text,

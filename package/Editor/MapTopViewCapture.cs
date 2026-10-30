@@ -33,7 +33,7 @@ namespace LogKit.EditorTools
         [SerializeField] private float _minZ = -50f;
         [SerializeField] private float _maxZ = 50f;
         [SerializeField] private string _outputFolder = "LogKitMaps";
-        [SerializeField] private string _serverUrl = "http://localhost:5000";
+        [SerializeField] private string _serverUrl = "http://localhost:5001";
         [SerializeField] private string _apiKey = "dev-log-key";
         [SerializeField] private bool _upload;
 
@@ -98,7 +98,7 @@ namespace LogKit.EditorTools
             _upload = EditorGUILayout.Toggle("서버에 바로 올리기", _upload);
             if (_upload)
             {
-                _serverUrl = EditorGUILayout.TextField("서버 주소", _serverUrl);
+                _serverUrl = EditorGUILayout.TextField("분석 서버 주소", _serverUrl);
                 _apiKey = EditorGUILayout.TextField("API 키", _apiKey);
             }
 
@@ -316,7 +316,7 @@ namespace LogKit.EditorTools
             }
         }
 
-        /// <summary>서버의 POST /api/maps/{scene}에 이미지와 범위 JSON을 올린다. 등록 엔드포인트와 필드는 와이어 호환 유지.</summary>
+        /// <summary>분석 서버(GGGG)의 POST /api/maps/{scene}에 이미지와 범위 JSON을 올린다. 등록 엔드포인트와 필드는 와이어 호환 유지.</summary>
         private string Upload(string scene, byte[] png, string json)
         {
             var form = new List<IMultipartFormSection>

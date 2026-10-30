@@ -19,13 +19,13 @@ public sealed class SessionSummary
 
     private static readonly UTF8Encoding _utf8Bom = new(true);
 
-    private readonly ServerOptions _options;
+    private readonly StorageOptions _options;
 
     /// <summary>
     /// 요약 저장 경로 설정을 받아 집계기를 만든다.
     /// options의 DataPath를 사용하며 인스턴스 상태에 보관한다.
     /// </summary>
-    public SessionSummary(ServerOptions options)
+    public SessionSummary(StorageOptions options)
     {
         _options = options;
     }

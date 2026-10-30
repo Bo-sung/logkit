@@ -1,0 +1,28 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+
+  <!--
+    GGGG 게임 전용 분석 서버. 공통 수신 서버(ingest)의 내보내기 API에서 세션 로그를 주기적으로 복사해 미러(data)에 쌓고,
+    그 사본으로 버전 통계·가설 통계·총기 통계·습격 리플레이를 계산한다.
+    다른 게임은 이 폴더를 본떠 analytics/<게임> 프로젝트를 하나 더 만든다.
+  -->
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <RootNamespace>LogServer</RootNamespace>
+    <AssemblyName>GgggAnalytics</AssemblyName>
+    <GarbageCollectionAdaptationMode>1</GarbageCollectionAdaptationMode>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <None Update="GameConfig\game-events.json" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+    <None Update="GameConfig\raid-stages.json" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+    <None Update="GameConfig\module-catalog.json" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+    <None Update="GameConfig\customer-catalog.json" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="../../core/LogKit.Core.csproj" />
+  </ItemGroup>
+
+</Project>

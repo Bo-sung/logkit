@@ -112,7 +112,7 @@ public sealed class GameAnalytics
         Dictionary<string, HeatmapBounds> bounds = ComputeHeatmapBounds(
             byVersion.Values.SelectMany(list => list.Select(item => item.Digest)), raid => raid.Points);
         List<string> versions = byVersion.Keys.ToList();
-        versions.Sort(CompareVersions);
+        versions.Sort(AppVersionOrder.Compare);
 
         return new AnalyticsResponse
         {
@@ -133,7 +133,7 @@ public sealed class GameAnalytics
         Dictionary<string, HeatmapBounds> bounds = ComputeHeatmapBounds(
             byVersion.Values.SelectMany(list => list.Select(item => item.Digest)), raid => raid.ShotPoints);
         List<string> versions = byVersion.Keys.ToList();
-        versions.Sort(CompareVersions);
+        versions.Sort(AppVersionOrder.Compare);
 
         return new WeaponAnalyticsResponse
         {
@@ -155,7 +155,7 @@ public sealed class GameAnalytics
     {
         Dictionary<string, List<(SessionRow Row, SessionDigest Digest)>> byVersion = GroupByVersion(month, excludeEditor);
         List<string> versions = byVersion.Keys.ToList();
-        versions.Sort((a, b) => CompareVersions(b, a));
+        versions.Sort((a, b) => AppVersionOrder.Compare(b, a));
         ReplayResponse response = new() { Month = month ?? string.Empty, ExcludeEditor = excludeEditor };
         foreach (string v in versions)
         {
@@ -223,7 +223,7 @@ public sealed class GameAnalytics
     {
         Dictionary<string, List<(SessionRow Row, SessionDigest Digest)>> byVersion = GroupByVersion(month, excludeEditor);
         List<string> versions = byVersion.Keys.ToList();
-        versions.Sort(CompareVersions);
+        versions.Sort(AppVersionOrder.Compare);
 
         InsightsResponse response = new()
         {
@@ -991,29 +991,6 @@ public sealed class GameAnalytics
         }
 
         return v;
-    }
-
-    /// <summary>
-    /// 버전 문자열을 점 구분 숫자 단위로 비교한다(1.10이 1.9 뒤). 숫자가 아닌 조각은 문자열로 비교한다.
-    /// </summary>
-    internal static int CompareVersions(string? a, string? b)
-    {
-        string[] left = (a ?? string.Empty).Split('.', '-', '_');
-        string[] right = (b ?? string.Empty).Split('.', '-', '_');
-        for (int i = 0; i < Math.Max(left.Length, right.Length); i++)
-        {
-            string l = i < left.Length ? left[i] : string.Empty;
-            string r = i < right.Length ? right[i] : string.Empty;
-            int cmp = long.TryParse(l, out long ln) && long.TryParse(r, out long rn)
-                ? ln.CompareTo(rn)
-                : string.CompareOrdinal(l, r);
-            if (cmp != 0)
-            {
-                return cmp;
-            }
-        }
-
-        return 0;
     }
 
     private static bool Is(string category, string expected) => string.Equals(category, expected, StringComparison.Ordinal);

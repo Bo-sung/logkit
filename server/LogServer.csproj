@@ -1,5 +1,9 @@
 <Project Sdk="Microsoft.NET.Sdk.Web">
 
+  <!--
+    공통 로그 수신 서버(ingest). 업로드 수신·저장·GM툴 열람·휴지통·분석 서버용 내보내기 API를 담당한다.
+    저장 코드는 core/LogKit.Core 프로젝트를, 게임별 분석은 analytics/* 프로젝트를 따로 빌드한다.
+  -->
   <PropertyGroup>
     <TargetFramework>net8.0</TargetFramework>
     <Nullable>enable</Nullable>
@@ -10,12 +14,15 @@
     <GarbageCollectionAdaptationMode>1</GarbageCollectionAdaptationMode>
   </PropertyGroup>
 
-  <!-- 게임 이벤트 규약·카탈로그 JSON은 출력 디렉터리로 복사해 기동 시 함께 로딩한다 -->
   <ItemGroup>
-    <None Update="GameConfig\game-events.json" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
-    <None Update="GameConfig\raid-stages.json" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
-    <None Update="GameConfig\module-catalog.json" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
-    <None Update="GameConfig\customer-catalog.json" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+    <!-- core와 analytics는 각자 프로젝트이므로 이 프로젝트의 소스에서 제외한다 -->
+    <Compile Remove="core/**;analytics/**" />
+    <Content Remove="core/**;analytics/**" />
+    <None Remove="core/**;analytics/**" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="core/LogKit.Core.csproj" />
   </ItemGroup>
 
 </Project>
