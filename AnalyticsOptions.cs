@@ -20,6 +20,12 @@ public sealed class AnalyticsOptions : StorageOptions
     /// <summary>복사해 올 수신 서버 주소(예: http://localhost:5000).</summary>
     public string IngestUrl { get; set; } = "http://localhost:5000";
 
+    /// <summary>
+    /// 이 분석 서버가 맡는 프로젝트 이름. 수신 서버에서 이 프로젝트 세션만 복사한다.
+    /// 프로젝트 라벨은 수신 서버가 업로드 키로 정하므로, 이름은 수신 서버 설정의 Projects 키와 같아야 한다.
+    /// </summary>
+    public string Project { get; set; } = "gggg";
+
     /// <summary>수신 서버의 열람 키(ReadApiKey). 세션 목록과 파일을 읽기만 하므로 열람 키면 충분하다.</summary>
     public string IngestApiKey { get; set; } = "dev-log-key";
 

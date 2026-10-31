@@ -107,7 +107,8 @@ public sealed class IngestMirror : BackgroundService
     /// </summary>
     public async Task<SyncResult> SyncOnceAsync(CancellationToken stoppingToken)
     {
-        ExportIndexResponse index = await _http.GetFromJsonAsync<ExportIndexResponse>("api/export/index", _json, stoppingToken)
+        string indexUrl = "api/export/index" + (string.IsNullOrEmpty(_options.Project) ? string.Empty : "?project=" + Uri.EscapeDataString(_options.Project));
+        ExportIndexResponse index = await _http.GetFromJsonAsync<ExportIndexResponse>(indexUrl, _json, stoppingToken)
             ?? throw new InvalidOperationException("수신 서버가 빈 목록을 돌려주었습니다");
 
         Dictionary<string, DateTime> remote = new(StringComparer.Ordinal);
