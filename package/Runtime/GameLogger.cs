@@ -33,6 +33,8 @@ namespace LogKit
         private const int QUIT_WRITER_JOIN_MILLISECONDS = 1500;
         private const int WRITER_SIGNAL_POLL_MILLISECONDS = 200;
         private const int FALLBACK_WAIT_MILLISECONDS = 1000;
+        private const int DEFAULT_FLUSH_TIMEOUT_MILLISECONDS = 3000;
+        private const int PAUSE_FLUSH_TIMEOUT_MILLISECONDS = 1000;
 
         private static readonly int MainThreadId = Thread.CurrentThread.ManagedThreadId;
 
@@ -51,6 +53,8 @@ namespace LogKit
         [SerializeField] [Tooltip("플레이 중 새로 쌓인 로그를 서버로 보내는 주기(초). 0 이하로 두면 주기 전송 없이 종료 때만 보낸다.")]
         private float _uploadIntervalSeconds = 5f;
         [SerializeField] private bool _uploadOnQuit = true;
+        [SerializeField] [Tooltip("앱이 일시정지(백그라운드 전환 등)될 때 쌓인 로그를 짧게 기다려 보낸다.")]
+        private bool _flushOnPause = true;
         [SerializeField] private bool _retryPendingOnStartup = true;
         [SerializeField] private int _requestTimeoutSeconds = 5;
 
@@ -341,6 +345,57 @@ namespace LogKit
         {
             _quitting = true;
             TriggerQuitFlush(FALLBACK_WAIT_MILLISECONDS);
+        }
+
+        void OnApplicationPause(bool paused)
+        {
+            if (paused && _flushOnPause && _bootstrapped && !_quitting)
+                FlushNowInternal(PAUSE_FLUSH_TIMEOUT_MILLISECONDS);
+        }
+
+        /// <summary>
+        /// 지금까지 쌓인 로그를 파일에 쓰고 서버로 보낸다. 메인 메뉴 전환 등 세션 중간의 중요한 순간에 호출한다.
+        /// 전송은 백그라운드에서 하고 timeoutMilliseconds까지만 기다린다. 시간이 지나도 보내지 못한 로그는 다음 주기에 이어서 보낸다.
+        /// 로그 큐를 파일에 쓰는 부분은 호출한 스레드에서 실행하므로, 로딩 화면처럼 잠깐 멈춰도 되는 자리에서 부른다.
+        /// </summary>
+        /// <param name="timeoutMilliseconds">전송을 기다릴 최대 시간(밀리초). 0이면 기다리지 않는다.</param>
+        public static void FlushNow(int timeoutMilliseconds = DEFAULT_FLUSH_TIMEOUT_MILLISECONDS)
+        {
+            GameLogger logger = _instance;
+            if (logger == null || !logger._bootstrapped || _quitting)
+                return;
+            logger.FlushNowInternal(timeoutMilliseconds);
+        }
+
+        /// <summary>
+        /// 큐를 파일에 쓰고 현재 세션 파일의 새 항목을 백그라운드 스레드에서 보낸다. 지정 시간까지만 기다린다.
+        /// timeoutMilliseconds를 입력으로 받으며, 전송 실패는 삼켜서 게임을 멈추지 않는다.
+        /// </summary>
+        private void FlushNowInternal(int timeoutMilliseconds)
+        {
+            FlushQueue();
+
+            LogUploader uploader = _uploader;
+            LogShipper shipper = _shipper;
+            if (uploader == null || shipper == null)
+                return;
+
+            // Ship은 내부 락으로 주기 전송과 직렬화되므로 여기서 동시에 불러도 안전하다.
+            Thread thread = new Thread(() =>
+            {
+                try
+                {
+                    shipper.Ship(uploader, false, false);
+                }
+                catch
+                {
+                    // 실패한 항목은 진행 위치가 남아 다음 주기에 다시 보낸다.
+                }
+            }) { IsBackground = true, Name = "LogKit.FlushNow" };
+            thread.Start();
+
+            if (timeoutMilliseconds > 0)
+                thread.Join(timeoutMilliseconds);
         }
 
         void OnDestroy()

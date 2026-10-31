@@ -7,7 +7,7 @@
 Package Manager → `Add package from git URL`:
 
 ```
-https://github.com/Bo-sung/logkit.git?path=package#v0.5.0
+https://github.com/Bo-sung/logkit.git?path=package#v0.6.0
 ```
 
 ## 사용법
@@ -33,6 +33,9 @@ GameLogger.Measure("RunDuration", 5); // 값 기록(횟수 + 합계 → 평균 �
 ```
 
 - `Debug.Log` 계열은 설정을 끄지 않는 한 자동 수집된다.
+- 메인 메뉴 전환처럼 세션 중간에 확실히 보내야 할 때는 `GameLogger.FlushNow()`를 부른다. 큐를 파일에 쓰고 서버로 보내며, 기본 3초까지만 기다린다. 전환 직전이나 로딩 화면에서 부른다.
+- 앱이 일시정지(`OnApplicationPause`)되면 `Flush On Pause`가 켜진 동안 1초까지 기다려 보낸다.
+- 강제 종료는 막을 수 없다. 그때 보내지 못한 로그는 로컬 파일에 남아 다음 기동에 재전송된다.
 - 파일 기록은 전용 워커 스레드가 담당하므로 고빈도 수집에도 프레임을 막지 않는다.
 - 세션당 기록 상한은 없다. 플레이 중 5초마다(`Upload Interval Seconds`) 새로 쌓인 로그만 이어서 보내고, 종료 때 남은 것을 마무리 전송한다.
 - 한 파트는 최대 20,000건 또는 4MB(압축 전)다. 실패하면 보낸 위치를 기억해 두었다가 다음 주기·다음 기동에 이어서 보낸다(서버 병합은 멱등).
