@@ -10,8 +10,11 @@ namespace LogServer;
 /// </summary>
 public sealed class SessionSummary
 {
-    private const string SUMMARY_HEADER = "session_id,date_utc,duration_sec,ended_cleanly,total,warnings,errors,exceptions,is_editor,platform,app_version";
-    private const int COLUMN_COUNT = 11;
+    private const string SUMMARY_HEADER = "session_id,date_utc,duration_sec,ended_cleanly,total,warnings,errors,exceptions,is_editor,platform,app_version,project";
+    private const int COLUMN_COUNT = 12;
+
+    /// <summary>project 열이 생기기 전의 행 길이. 이 길이의 행은 프로젝트를 빈 값으로 읽는다.</summary>
+    private const int LEGACY_COLUMN_COUNT = 11;
     private const string CRLF = "\r\n";
     private const string DATE_FORMAT = "yyyy-MM-dd HH:mm:ss";
 
@@ -69,6 +72,7 @@ public sealed class SessionSummary
             IsEditor = meta?.IsEditor ?? false,
             Platform = CsvSessionStore.NormalizeNewlines(meta?.Platform),
             AppVersion = CsvSessionStore.NormalizeNewlines(meta?.AppVersion),
+            Project = CsvSessionStore.NormalizeNewlines(meta?.Project),
         };
 
         UploadSummary info = new UploadSummary
@@ -134,6 +138,7 @@ public sealed class SessionSummary
             row.IsEditor ? "true" : "false",
             CsvSessionStore.NormalizeNewlines(row.Platform),
             CsvSessionStore.NormalizeNewlines(row.AppVersion),
+            CsvSessionStore.NormalizeNewlines(row.Project),
         };
 
         SemaphoreSlim gate = FileLocks.Get(path);
@@ -170,7 +175,7 @@ public sealed class SessionSummary
     /// 요약 파일이 있는 월 목록을 월별 집계와 함께 최신순으로 돌려준다.
     /// 입력값은 없으며 파일명이 월 형식인 요약 파일만 집계해 반환한다.
     /// </summary>
-    public List<MonthInfo> ListMonths()
+    public List<MonthInfo> ListMonths(string? project = null)
     {
         List<MonthInfo> months = new();
         if (!Directory.Exists(SummaryDirectory))
@@ -186,7 +191,9 @@ public sealed class SessionSummary
                 continue;
             }
 
-            List<SessionRow> sessions = ReadMonthRows(match.Groups[1].Value);
+            List<SessionRow> sessions = ReadMonthRows(match.Groups[1].Value)
+                .Where(row => ProjectMatches(row, project))
+                .ToList();
             MonthInfo info = new() { Month = match.Groups[1].Value, Sessions = sessions.Count };
             foreach (SessionRow session in sessions)
             {
@@ -201,6 +208,32 @@ public sealed class SessionSummary
 
         months.Sort((a, b) => string.CompareOrdinal(b.Month, a.Month));
         return months;
+    }
+
+    /// <summary>
+    /// 요약 행에 기록된 프로젝트별 세션 수를 돌려준다. 프로젝트가 없는 예전 세션은 빈 이름으로 센다.
+    /// </summary>
+    public List<ProjectInfo> ListProjects()
+    {
+        Dictionary<string, int> counts = new(StringComparer.Ordinal);
+        foreach (MonthInfo info in ListMonths())
+        {
+            foreach (SessionRow row in ReadMonthRows(info.Month))
+            {
+                counts[row.Project] = counts.TryGetValue(row.Project, out int known) ? known + 1 : 1;
+            }
+        }
+
+        return counts
+            .OrderBy(pair => pair.Key, StringComparer.Ordinal)
+            .Select(pair => new ProjectInfo { Name = pair.Key, Sessions = pair.Value })
+            .ToList();
+    }
+
+    /// <summary>행이 project 조건에 맞는지 본다. project가 비어 있으면 모든 행이 맞는다.</summary>
+    public static bool ProjectMatches(SessionRow row, string? project)
+    {
+        return string.IsNullOrEmpty(project) || string.Equals(row.Project, project, StringComparison.Ordinal);
     }
 
     /// <summary>
@@ -378,7 +411,7 @@ public sealed class SessionSummary
     /// </summary>
     private static SessionRow? ToSessionRow(string[] cells)
     {
-        if (cells.Length < COLUMN_COUNT || cells[0] == "session_id")
+        if (cells.Length < LEGACY_COLUMN_COUNT || cells[0] == "session_id")
         {
             return null;
         }
@@ -396,6 +429,7 @@ public sealed class SessionSummary
             IsEditor = string.Equals(cells[8], "true", StringComparison.OrdinalIgnoreCase),
             Platform = cells[9],
             AppVersion = cells[10],
+            Project = cells.Length >= COLUMN_COUNT ? cells[11] : string.Empty,
         };
     }
 

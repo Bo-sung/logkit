@@ -6,6 +6,11 @@ namespace LogServer;
 /// </summary>
 public sealed class UploadBatch
 {
+    /// <summary>
+    /// 프로젝트 라벨. 서버가 업로드 키로 정해 채운다. 클라이언트가 보낸 값은 무시한다.
+    /// </summary>
+    public string Project { get; set; } = string.Empty;
+
     /// <summary>세션 식별자. GUID 앞 8자리 + 시작 시각 접미.</summary>
     public string SessionId { get; set; } = string.Empty;
 
@@ -64,6 +69,9 @@ public sealed class MetricSample
 public sealed class SessionMeta
 {
     public string SessionId { get; set; } = string.Empty;
+
+    /// <summary>프로젝트 라벨. 업로드 키로 서버가 정한다. 예전 세션은 비어 있을 수 있다.</summary>
+    public string Project { get; set; } = string.Empty;
     public string StartedAtUtc { get; set; } = string.Empty;
     public string EndedAtUtc { get; set; } = string.Empty;
     public string AppVersion { get; set; } = string.Empty;
@@ -142,8 +150,20 @@ public sealed class LogEntry
 /// <summary>
 /// 요약 CSV 한 행을 담은 세션 목록 항목. 조회 API와 대시보드가 월별 세션 목록으로 반환한다.
 /// </summary>
+public sealed class ProjectInfo
+{
+    /// <summary>프로젝트 이름. 예전 세션은 빈 문자열이다.</summary>
+    public string Name { get; set; } = string.Empty;
+
+    /// <summary>이 프로젝트의 세션 수.</summary>
+    public int Sessions { get; set; }
+}
+
 public sealed class SessionRow
 {
+    /// <summary>프로젝트 라벨. 예전 요약 행은 비어 있다.</summary>
+    public string Project { get; set; } = string.Empty;
+
     /// <summary>세션 식별자.</summary>
     public string SessionId { get; set; } = string.Empty;
 
@@ -228,6 +248,9 @@ public sealed class SessionDetailResponse
 {
     /// <summary>세션 식별자.</summary>
     public string SessionId { get; set; } = string.Empty;
+
+    /// <summary>프로젝트 라벨. 예전 세션은 빈 문자열이다.</summary>
+    public string Project { get; set; } = string.Empty;
 
     /// <summary>세션 CSV 파일이 존재하면 true.</summary>
     public bool HasCsv { get; set; }
