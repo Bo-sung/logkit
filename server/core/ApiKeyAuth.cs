@@ -9,6 +9,9 @@ namespace LogServer;
 /// </summary>
 public sealed class ApiKeyAuth
 {
+    /// <summary>업로드 요청의 프로젝트 이름을 HttpContext.Items에 담는 키. 값이 없으면 프로젝트 없는 요청이다.</summary>
+    public const string ProjectItem = "LogProject";
+
     private readonly RequestDelegate _next;
     private readonly ApiKeys _keys;
 
@@ -38,13 +41,19 @@ public sealed class ApiKeyAuth
                 provided = context.Request.Query["key"].FirstOrDefault();
             }
 
-            if (!_keys.IsAllowed(provided, RoleFor(context.Request)))
+            ApiRole role = RoleFor(context.Request);
+            if (!_keys.IsAllowed(provided, role))
             {
                 context.Response.StatusCode = _keys.IsKnown(provided)
                     ? StatusCodes.Status403Forbidden
                     : StatusCodes.Status401Unauthorized;
                 await context.Response.WriteAsync(_keys.IsKnown(provided) ? "forbidden" : "unauthorized");
                 return;
+            }
+
+            if (role == ApiRole.Upload && _keys.ProjectFor(provided) is { } project)
+            {
+                context.Items[ProjectItem] = project;
             }
         }
 

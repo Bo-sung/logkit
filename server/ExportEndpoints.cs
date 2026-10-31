@@ -21,13 +21,26 @@ public static class ExportEndpoints
     /// <summary>
     /// GET /api/export/index 처리기. 저장된 모든 세션의 ID와 마지막 변경 시각(UTC, ISO 8601)을 돌려준다.
     /// 입력값은 없으며 200과 {generatedUtc, sessions:[{sessionId, updatedUtc}]} JSON을 반환한다.
-    /// 세션 파일이 하나도 없는 항목은 목록에서 빠진다.
+    /// 세션 파일이 하나도 없는 항목은 목록에서 빠진다. project(쿼리)를 주면 그 프로젝트 세션만 돌려준다.
     /// </summary>
-    private static IResult HandleIndex(CsvSessionStore store)
+    private static IResult HandleIndex(string? project, CsvSessionStore store, SessionSummary summary)
     {
+        // 프로젝트 조건이 있으면 요약 행에 기록된 프로젝트로 거른다(요약이 없는 세션은 프로젝트를 알 수 없어 빠진다)
+        Dictionary<string, string>? projectOf = null;
+        if (!string.IsNullOrEmpty(project))
+        {
+            projectOf = summary.ListMonths().SelectMany(info => summary.GetMonthSessions(info.Month))
+                .ToDictionary(row => row.SessionId, row => row.Project, StringComparer.Ordinal);
+        }
+
         List<ExportIndexItem> sessions = new();
         foreach ((string sessionId, DateTime updated) in store.ListSessionChanges())
         {
+            if (projectOf is not null && (!projectOf.TryGetValue(sessionId, out string? owner) || owner != project))
+            {
+                continue;
+            }
+
             sessions.Add(new ExportIndexItem
             {
                 SessionId = sessionId,

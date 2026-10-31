@@ -12,6 +12,7 @@ public sealed class UploadInbox
     private const string GZIP_EXTENSION = ".json.gz";
     private const string JSON_EXTENSION = ".json";
     private const string TEMP_EXTENSION = ".tmp";
+    private const string PROJECT_SEPARATOR = "~";
 
     private readonly ServerOptions _options;
     private readonly SemaphoreSlim _arrived = new(0);
@@ -30,13 +31,15 @@ public sealed class UploadInbox
 
     /// <summary>
     /// 수신 본문을 수신함에 저장하고 처리기를 깨운다.
-    /// 본문과 gzip 여부를 사용하며, 임시 이름으로 다 쓴 뒤 이름을 바꿔 처리기가 덜 쓴 파일을 읽지 않게 한다.
+    /// 본문, gzip 여부, 프로젝트 이름(빈 값이면 없음)을 사용한다. 프로젝트는 파일 이름 뒤에 "~이름"으로 남긴다.
+    /// 임시 이름으로 다 쓴 뒤 이름을 바꿔 처리기가 덜 쓴 파일을 읽지 않게 한다.
     /// </summary>
-    public async Task SaveAsync(byte[] body, bool isGzip, CancellationToken cancellationToken)
+    public async Task SaveAsync(byte[] body, bool isGzip, string project, CancellationToken cancellationToken)
     {
         Directory.CreateDirectory(InboxDirectory);
         long sequence = Interlocked.Increment(ref _sequence);
-        string name = $"{DateTime.UtcNow.Ticks:D19}_{sequence:D10}" + (isGzip ? GZIP_EXTENSION : JSON_EXTENSION);
+        string label = string.IsNullOrEmpty(project) ? string.Empty : PROJECT_SEPARATOR + project;
+        string name = $"{DateTime.UtcNow.Ticks:D19}_{sequence:D10}{label}" + (isGzip ? GZIP_EXTENSION : JSON_EXTENSION);
         string path = Path.Combine(InboxDirectory, name);
         string tempPath = path + TEMP_EXTENSION;
 
@@ -80,6 +83,20 @@ public sealed class UploadInbox
         return Directory.Exists(InboxDirectory)
             ? Directory.GetFiles(InboxDirectory).Count(path => !path.EndsWith(TEMP_EXTENSION, StringComparison.Ordinal))
             : 0;
+    }
+
+    /// <summary>
+    /// 수신함 파일 이름에서 프로젝트 라벨을 꺼낸다. 라벨이 없는 예전 파일이면 빈 문자열이다.
+    /// path를 입력으로 사용하며 파일을 읽지 않는다.
+    /// </summary>
+    public static string ProjectOf(string path)
+    {
+        string name = Path.GetFileName(path);
+        name = name.EndsWith(GZIP_EXTENSION, StringComparison.Ordinal)
+            ? name[..^GZIP_EXTENSION.Length]
+            : name[..^JSON_EXTENSION.Length];
+        int separator = name.IndexOf(PROJECT_SEPARATOR, StringComparison.Ordinal);
+        return separator < 0 ? string.Empty : name[(separator + PROJECT_SEPARATOR.Length)..];
     }
 
     /// <summary>수신함 파일이 gzip 본문인지 확인한다.</summary>
@@ -190,6 +207,9 @@ public sealed class InboxProcessor : BackgroundService
                 _inbox.MoveToFailed(path);
                 continue;
             }
+
+            // 프로젝트는 업로드 키로 서버가 정한 값만 쓴다. 클라이언트가 JSON에 넣은 값은 버린다.
+            batch.Project = UploadInbox.ProjectOf(path);
 
             _store.SavePartFiles(batch, body, UploadInbox.IsGzipFile(path));
             File.Delete(path);

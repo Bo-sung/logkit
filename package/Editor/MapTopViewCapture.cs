@@ -34,7 +34,7 @@ namespace LogKit.EditorTools
         [SerializeField] private float _maxZ = 50f;
         [SerializeField] private string _outputFolder = "LogKitMaps";
         [SerializeField] private string _serverUrl = "http://localhost:5001";
-        [SerializeField] private string _apiKey = "dev-log-key";
+        [SerializeField] private string _apiKey = string.Empty;
         [SerializeField] private bool _upload;
 
         private Vector2 _scroll;

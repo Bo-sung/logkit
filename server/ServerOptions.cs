@@ -17,8 +17,14 @@ public sealed class ServerOptions : StorageOptions
     /// <summary>업로드 키. 게임 클라이언트(GameLogger)가 POST /api/logs에 쓴다. 비우면 ApiKey를 쓴다.</summary>
     public string UploadApiKey { get; set; } = string.Empty;
 
-    /// <summary>설정된 역할별 키를 인증 미들웨어용 묶음으로 만든다.</summary>
-    public ApiKeys ToApiKeys() => new(ApiKey, ReadApiKey, UploadApiKey);
+    /// <summary>
+    /// 프로젝트 이름 → 업로드 키. 이 키로 온 로그는 해당 프로젝트 라벨을 받는다.
+    /// 예: "gggg": "<키>", "poc_ts": "<키>". 키는 프로젝트마다 다르게 둔다.
+    /// </summary>
+    public Dictionary<string, string> Projects { get; set; } = new();
+
+    /// <summary>설정된 역할별 키와 프로젝트 키를 인증 미들웨어용 묶음으로 만든다.</summary>
+    public ApiKeys ToApiKeys() => new(ApiKey, ReadApiKey, UploadApiKey, Projects);
 
     /// <summary>gzip 수신 본문 상한(바이트). 초과 시 413.</summary>
     public long MaxBodyBytes { get; set; } = 5242880L;

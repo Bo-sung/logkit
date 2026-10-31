@@ -103,6 +103,7 @@ nav.pages b { color: var(--text); font-weight: 600; }
 <main>
   <section class="card">
     <div class="row">
+      <select id="project" style="min-width:120px" title="프로젝트"></select>
       <select id="month" style="min-width:170px"></select>
       <button id="refresh">새로고침</button>
       <span class="spacer"></span>
@@ -197,8 +198,10 @@ const VER_STORE = "logkit.sessions.version";
 const HIDDEN_METRICS = new Set(["Scan", "ScanUsed", "SoundSource", "SoundSourceAccessed"]);
 const shownMetrics = (list) => (list || []).filter((m) => !HIDDEN_METRICS.has(m.key));
 const LIMIT = 500;
-const state = { month: null, session: null, offset: 0, matched: 0, version: "" };
+const PROJECT_STORE = "logkit.gm.project";
+const state = { month: null, session: null, offset: 0, matched: 0, version: "", project: "" };
 try { state.version = localStorage.getItem(VER_STORE) || ""; } catch (_) {}
+try { state.project = localStorage.getItem(PROJECT_STORE) || ""; } catch (_) {}
 
 function esc(s) {
   return String(s ?? "").replace(/[&<>"']/g, (c) =>
@@ -254,7 +257,7 @@ function rateText(d) {
 async function loadMonthMetrics() {
   const el = $("monthmetrics");
   if (!state.month) { el.innerHTML = ""; return; }
-  const data = await (await api("/api/metrics?month=" + state.month)).json();
+  const data = await (await api("/api/metrics?" + new URLSearchParams({ month: state.month, project: state.project }))).json();
   let html = "";
   for (const d of data.derived) {
     html += '<span class="chip rate"><b>' + esc(d.name) + "</b> " + rateText(d) + "</span>";
@@ -267,8 +270,28 @@ async function loadMonthMetrics() {
     || '<span class="muted">이 달에 집계된 플레이 지표가 없습니다 — 클라이언트에서 GameLogger.Count/Measure를 호출하면 표시됩니다.</span>';
 }
 
+// 프로젝트 목록을 읽어 선택 상자를 채운다. 저장해 둔 프로젝트가 없어졌으면 전체로 돌아간다.
+async function loadProjects() {
+  const data = await (await api("/api/projects")).json();
+  const sel = $("project");
+  sel.innerHTML = "";
+  const all = document.createElement("option");
+  all.value = "";
+  all.textContent = "전체 프로젝트";
+  sel.appendChild(all);
+  for (const p of data.projects) {
+    const o = document.createElement("option");
+    o.value = p.name;
+    o.textContent = (p.name || "(이름 없음)") + "  (" + num(p.sessions) + ")";
+    sel.appendChild(o);
+  }
+  if (!data.projects.some((p) => p.name === state.project)) state.project = "";
+  sel.value = state.project;
+}
+
 async function loadMonths(keep) {
-  const data = await (await api("/api/months")).json();
+  await loadProjects();
+  const data = await (await api("/api/months?" + new URLSearchParams({ project: state.project }))).json();
   const sel = $("month");
   sel.innerHTML = "";
   if (data.months.length === 0) {
@@ -297,6 +320,7 @@ async function loadMonths(keep) {
 async function loadSessions() {
   if (!state.month) { $("sbody").innerHTML = ""; $("scount").textContent = ""; return; }
   const p = new URLSearchParams({ month: state.month });
+  if (state.project) p.set("project", state.project);
   const ver = state.version;
   if (ver) p.set("version", ver);
   if ($("sq").value.trim()) p.set("q", $("sq").value.trim());
@@ -505,6 +529,13 @@ $("connect").onclick = connect;
 $("key").addEventListener("keydown", (ev) => { if (ev.key === "Enter") connect(); });
 $("refresh").onclick = () => connect();
 $("month").onchange = async () => { state.month = $("month").value || null; await loadSessions(); setStatus("연결됨 — " + (state.month || "데이터 없음")); };
+$("project").onchange = async () => {
+  state.project = $("project").value;
+  try { localStorage.setItem(PROJECT_STORE, state.project); } catch (_) {}
+  await loadMonths(state.month);
+  await loadSessions();
+  setStatus("연결됨 — " + (state.project || "전체 프로젝트") + " / " + (state.month || "데이터 없음"));
+};
 $("sq").addEventListener("keydown", (ev) => { if (ev.key === "Enter") loadSessions(); });
 $("ssort").onchange = loadSessions;
 $("sonly").onchange = loadSessions;
@@ -534,7 +565,7 @@ $("ddel").onclick = async () => {
 $("delmonth").onclick = async () => {
   const month = state.month;
   if (!month) return;
-  if (!confirm(month + " 의 모든 세션을 휴지통으로 옮기고 월 요약을 지웁니다. 휴지통에서 세션별로 복원할 수 있습니다. 계속할까요?")) return;
+  if (!confirm(month + " 의 모든 프로젝트 세션을 휴지통으로 옮기고 월 요약을 지웁니다. 휴지통에서 세션별로 복원할 수 있습니다. 계속할까요?")) return;
   if (prompt("확인하려면 월 키를 입력하세요: " + month) !== month) { setStatus("삭제 취소"); return; }
   try {
     const res = await api("/api/months/" + month, { method: "DELETE" });

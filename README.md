@@ -28,10 +28,10 @@ Count/Measure로 모은 플레이 지표(공격 횟수 등)는 배치와 함께 
 Package Manager → `Add package from git URL`:
 
 ```
-https://github.com/Bo-sung/logkit.git?path=package#v0.4.0
+https://github.com/Bo-sung/logkit.git?path=package#v0.5.0
 ```
 
-- `#v0.4.0` 태그로 버전 고정을 권장한다. 최신이면 태그 부분을 생략한다.
+- `#v0.5.0` 태그로 버전 고정을 권장한다. 최신이면 태그 부분을 생략한다.
 - 오프라인 프로젝트는 `package/` 폴더를 대상 프로젝트의 `Packages/` 아래에 통째로 복사해도 된다(embedded package).
 
 ### 사용법
@@ -56,7 +56,7 @@ GameLogger.Measure("RunDuration", 5); // 값 기록(횟수 + 합계 → 평균 �
 | --- | --- | --- |
 | Development Server Url | `http://localhost:5000/api/logs` | 에디터·Development Build에서 사용 |
 | Release Server Url | `http://localhost:5000/api/logs` | 일반 빌드에서 사용 |
-| Api Key | `dev-log-key` | 서버 `ApiKey`와 일치해야 한다 |
+| Api Key | (필수, 비워 두지 않는다) | 프로젝트 업로드 키. 서버 `Projects`에 등록한 키와 같아야 한다. 프로젝트 라벨은 이 키로 서버가 정한다 |
 | Capture Unity Logs | true | `Debug.Log` 계열 자동 캡처 |
 | Flush Interval Seconds | 5 | 큐 → 로컬 파일 기록 주기 |
 | Upload Interval Seconds | 5 | 새로 쌓인 로그를 서버로 보내는 주기. 0 이하면 종료 때만 보낸다 |
@@ -90,7 +90,9 @@ dotnet run            # GGGG 분석 서버 http://0.0.0.0:5001, 미러는 저장
 | 키 | 기본값 | 설명 |
 | --- | --- | --- |
 | Urls | `http://0.0.0.0:5000` | 대기 주소 |
-| ApiKey | `dev-log-key` | 클라이언트 `Api Key`와 일치 |
+| ApiKey | `dev-log-key` | 관리 키. 삭제·복원 등 변경 호출에 쓴다 |
+| ReadApiKey · UploadApiKey | (비움) | 열람 키(GM 툴·분석 서버)와 업로드 키. 비우면 ApiKey를 쓴다 |
+| Projects | `{}` | 프로젝트 이름 → 업로드 키. 예: `{"gggg": "<키>", "poc_ts": "<키>"}`. 이 키로 올라온 로그는 해당 프로젝트 라벨을 받는다 |
 | DataPath | `data` | CSV·raw 저장 위치(프로세스 작업 디렉터리 기준, 절대 경로 권장) |
 | MaxBodyBytes | 5242880 | gzip 본문 상한(초과 413) |
 | KeepRawJsonl / RawRetentionDays | true / 90 | 원문 보존 여부와 기간 |

@@ -58,6 +58,7 @@ public static class Program
         app.MapPost("/api/logs", HandleUploadAsync);
         app.MapGet("/health", HandleHealth);
         app.MapGet("/api/months", HandleMonths);
+        app.MapGet("/api/projects", HandleProjects);
         app.MapGet("/api/sessions", HandleSessions);
         app.MapGet("/api/sessions/{sessionId}", HandleSessionDetail);
         app.MapGet("/api/sessions/{sessionId}/csv", HandleSessionCsv);
@@ -124,7 +125,8 @@ public static class Program
         }
 
         bool bodyIsGzip = string.Equals(context.Request.Headers.ContentEncoding.ToString(), "gzip", StringComparison.OrdinalIgnoreCase);
-        await inbox.SaveAsync(body, bodyIsGzip, context.RequestAborted);
+        string project = context.Items[ApiKeyAuth.ProjectItem] as string ?? string.Empty;
+        await inbox.SaveAsync(body, bodyIsGzip, project, context.RequestAborted);
         return Results.Json(new { queued = true }, _jsonOptions, statusCode: StatusCodes.Status202Accepted);
     }
 
@@ -150,9 +152,18 @@ public static class Program
     /// GET /api/months 처리기. 요약 파일이 있는 월 목록과 월별 집계를 돌려준다.
     /// 입력값은 없으며 200 상태와 월 목록 JSON을 반환한다.
     /// </summary>
-    private static IResult HandleMonths(SessionSummary summary)
+    private static IResult HandleMonths(string? project, SessionSummary summary)
     {
-        return Results.Json(new MonthsResponse { Months = summary.ListMonths() }, _jsonOptions);
+        return Results.Json(new MonthsResponse { Months = summary.ListMonths(project) }, _jsonOptions);
+    }
+
+    /// <summary>
+    /// GET /api/projects 처리기. 요약에 있는 프로젝트 이름과 세션 수를 돌려준다.
+    /// 입력값은 없으며 200과 프로젝트 목록 JSON을 반환한다.
+    /// </summary>
+    private static IResult HandleProjects(SessionSummary summary)
+    {
+        return Results.Json(new { projects = summary.ListProjects() }, _jsonOptions);
     }
 
     /// <summary>
@@ -166,6 +177,7 @@ public static class Program
         string? q,
         string? onlyIssues,
         string? sort,
+        string? project,
         SessionSummary summary)
     {
         if (string.IsNullOrEmpty(month) || !_monthPattern.IsMatch(month))
@@ -173,7 +185,7 @@ public static class Program
             return Results.BadRequest(new { error = "month must be yyyy-MM" });
         }
 
-        List<SessionRow> sessions = summary.GetMonthSessions(month);
+        List<SessionRow> sessions = summary.GetMonthSessions(month).Where(row => SessionSummary.ProjectMatches(row, project)).ToList();
         List<string> versions = sessions.Select(row => row.AppVersion).Distinct(StringComparer.Ordinal).ToList();
         versions.Sort((a, b) => AppVersionOrder.Compare(b, a));
 
@@ -260,6 +272,7 @@ public static class Program
             IsEditor = metaRow.IsEditor,
             Platform = metaRow.Platform,
             AppVersion = metaRow.AppVersion,
+            Project = metaRow.Project,
             Matched = matched,
             Returned = page.Count,
             Offset = parsedOffset,
@@ -385,6 +398,7 @@ public static class Program
     /// </summary>
     private static IResult HandleMonthMetrics(
         string? month,
+        string? project,
         ServerOptions options,
         CsvSessionStore store,
         SessionSummary summary)
@@ -394,7 +408,7 @@ public static class Program
             return Results.BadRequest(new { error = "month must be yyyy-MM" });
         }
 
-        List<SessionRow> sessions = summary.GetMonthSessions(month);
+        List<SessionRow> sessions = summary.GetMonthSessions(month).Where(row => SessionSummary.ProjectMatches(row, project)).ToList();
         Dictionary<string, (long Count, double Sum)> merged = new(StringComparer.Ordinal);
         foreach (SessionRow session in sessions)
         {

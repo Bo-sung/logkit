@@ -22,7 +22,6 @@ namespace LogKit
     public class GameLogger : MonoBehaviour
     {
         private const string DEFAULT_SERVER_URL = "http://localhost:5000/api/logs";
-        private const string DEFAULT_API_KEY = "dev-log-key";
         private const string LOG_DIRECTORY_NAME = "Logs";
         private const string UNITY_CATEGORY = "Unity";
         private const string LEVEL_INFO = "Info";
@@ -41,7 +40,8 @@ namespace LogKit
         // 서버 연결 값이며 Inspector에서 덮어쓸 수 있다.
         [SerializeField] private string _developmentServerUrl = DEFAULT_SERVER_URL;
         [SerializeField] private string _releaseServerUrl = DEFAULT_SERVER_URL;
-        [SerializeField] private string _apiKey = DEFAULT_API_KEY;
+        // 프로젝트 업로드 키. 서버가 이 키로 프로젝트를 정하므로 프로젝트마다 다른 값을 넣는다. 기본값을 두지 않는다.
+        [SerializeField] private string _apiKey = string.Empty;
 
         [Header("수집 설정")]
         [SerializeField] private bool _captureUnityLogs = true;
@@ -287,6 +287,11 @@ namespace LogKit
             {
                 Destroy(gameObject);
                 return;
+            }
+
+            if (string.IsNullOrEmpty(_apiKey))
+            {
+                Debug.LogWarning("[LogKit] Api Key가 비어 있어 서버 업로드가 거부됩니다. 이 프로젝트의 업로드 키를 GameLogger의 Api Key에 넣으세요.");
             }
 
             _instance = this;

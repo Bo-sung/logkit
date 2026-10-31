@@ -198,6 +198,7 @@ public sealed class CsvSessionStore
         SessionMeta meta = new SessionMeta
         {
             SessionId = batch.SessionId,
+            Project = string.IsNullOrEmpty(batch.Project) ? previous?.Project ?? string.Empty : batch.Project,
             StartedAtUtc = batch.StartedAtUtc,
             EndedAtUtc = endedAtUtc,
             AppVersion = batch.AppVersion,

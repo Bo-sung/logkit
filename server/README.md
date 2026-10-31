@@ -31,7 +31,8 @@ dotnet run        # http://0.0.0.0:5000 에서 대기
 | Urls | `http://0.0.0.0:5000` | 대기 주소 |
 | ApiKey | `dev-log-key` | 관리 키. 삭제·복원·맵 등록 등 데이터를 바꾸는 호출에 쓴다. 읽기·업로드 키를 비우면 조회·업로드에도 쓰인다(예전 단일 키 설정과 같은 동작). 비어 있으면 `/api`를 전부 401로 거부 |
 | ReadApiKey | (비움) | 열람 키. GM 툴과 분석 서버(내보내기)가 쓴다. 조회만 허용하고 변경 호출은 403. 비우면 ApiKey |
-| UploadApiKey | (비움) | 업로드 키. 게임 클라이언트(GameLogger)의 `Api Key`와 맞춘다. `POST /api/logs`만 허용. 비우면 ApiKey |
+| UploadApiKey | (비움) | 공용 업로드 키. `POST /api/logs`만 허용하며 프로젝트 라벨은 붙지 않는다. 비우면 ApiKey |
+| Projects | `{}` | 프로젝트 이름 → 업로드 키. 예: `{"gggg": "<키>", "poc_ts": "<키>"}`. 이 키로 올라온 로그는 그 프로젝트 라벨을 받는다(이름은 소문자·숫자·_·- 32자 이내). 클라이언트가 보낸 프로젝트 값은 무시한다 |
 | DataPath | `data` | CSV·raw 저장 루트(프로세스 작업 디렉터리 기준, 상시 운영 시 절대 경로 권장) |
 | MaxBodyBytes | 5242880 | gzip 본문 상한(초과 시 413) |
 | KeepRawJsonl | true | 수신 원문을 `data/raw/`에 보존할지 여부 |
