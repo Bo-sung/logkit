@@ -67,7 +67,8 @@ function Wait-Json([string]$url, [hashtable]$headers, [int]$seconds, [scriptbloc
 }
 
 # ---------- 1. Plan ----------
-if ($Name -notmatch '^[a-z0-9][a-z0-9_-]{0,31}$') {
+# -cnotmatch: case-sensitive. The ingest server accepts lowercase names only.
+if ($Name -cnotmatch '^[a-z0-9][a-z0-9_-]{0,31}$') {
     throw 'Name must be lowercase letters, digits, _ or -, up to 32 characters.'
 }
 
@@ -163,7 +164,15 @@ try {
     Stop-Port $IngestPort
     Start-Launcher $IngestDir
     $ingestHealth = Wait-Json ('http://localhost:' + $IngestPort + '/health') @{} 60 { param($b) $b -match 'ok' }
-    if (-not $ingestHealth) { throw ('ingest server did not come back. Restore the backup: ' + $backup) }
+    if (-not $ingestHealth) {
+        # Roll back: restore the config, start the ingest server again, then stop.
+        Write-Host 'ingest did not come back; restoring the backup config and restarting it' -ForegroundColor Yellow
+        Stop-Port $IngestPort
+        Copy-Item $backup $ingestCfgPath -Force
+        Start-Launcher $IngestDir
+        $restored = Wait-Json ('http://localhost:' + $IngestPort + '/health') @{} 60 { param($b) $b -match 'ok' }
+        throw ('ingest server failed with the new project entry. Config restored from ' + $backup + ' (ingest back: ' + [bool]$restored + ')')
+    }
 
     # ---------- 6. Start analytics and verify ----------
     Write-Step 'start analytics server'
