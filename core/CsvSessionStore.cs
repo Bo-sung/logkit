@@ -1,0 +1,737 @@
+using System.Collections.Concurrent;
+using System.Globalization;
+using System.IO.Compression;
+using System.Text;
+using System.Text.Json;
+using System.Text.RegularExpressions;
+
+namespace LogServer;
+
+/// <summary>
+/// 경로 단위로 세마포어를 나눠 주는 파일 잠금 헬퍼. 같은 파일을 쓰는 스레드만 직렬화한다.
+/// path를 입력으로 사용하며 경로별 SemaphoreSlim을 정적 사전에 보관한다.
+/// </summary>
+internal static class FileLocks
+{
+    private static readonly ConcurrentDictionary<string, SemaphoreSlim> _gates = new();
+
+    /// <summary>
+    /// 지정한 파일 경로 전용의 잠금 객체를 돌려준다.
+    /// path를 키로 사용하며, 없으면 새로 만들어 _gates에 추가한다.
+    /// </summary>
+    public static SemaphoreSlim Get(string path)
+    {
+        return _gates.GetOrAdd(path, _ => new SemaphoreSlim(1, 1));
+    }
+}
+
+/// <summary>
+/// 세션 원본 CSV와 raw gzip을 디스크에 기록하는 저장소.
+/// sessionId와 로그 항목을 받아 data/sessions, data/raw 아래 파일을 교체 쓰며, 파일 단위 잠금으로 깨진 CSV를 막는다.
+/// </summary>
+public sealed class CsvSessionStore
+{
+    private const string SESSION_HEADER = "timestamp_utc,level,category,scene,message,data_json,stack_trace";
+    private const string METRICS_HEADER = "metric_key,count,sum";
+    private const string CRLF = "\r\n";
+    private const int MAX_MESSAGE_CHARS = 2000;
+    private const int MAX_STACK_CHARS = 8000;
+    private const int MAX_DATA_CHARS = 4000;
+    private const int MAX_SHORT_CHARS = 256;
+    private const string TIMESTAMP_FORMAT = "yyyy-MM-dd HH:mm:ss.fff";
+
+    /// <summary>받을 수 있는 최대 파트 번호. 클라이언트가 5초마다 파트를 보내도 약 58일 분량이다.</summary>
+    public const int MaxPartIndex = 999999;
+
+    private static readonly Regex _safeSessionId = new("^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$", RegexOptions.Compiled);
+    private static readonly Regex _partFilePattern = new(@"^" + FILE_BASE_CAPTURE + @"\.p(\d{4,6})\.csv$", RegexOptions.Compiled);
+    private static readonly Regex _rawPartFilePattern = new(@"^" + FILE_BASE_CAPTURE + @"\.p(\d{4,6})\.jsonl\.gz$", RegexOptions.Compiled);
+    private static readonly UTF8Encoding _utf8Bom = new(true);
+
+    /// <summary>파일명에서 sessionId를 뽑는 정규식 공통 접두.</summary>
+    private const string FILE_BASE_CAPTURE = "(?<id>[A-Za-z0-9][A-Za-z0-9._-]{0,63})";
+
+    /// <summary>메타·지표 파일 직렬화에 쓰는 JSON 옵션.</summary>
+    public static readonly JsonSerializerOptions JsonWeb = new(JsonSerializerDefaults.Web);
+
+    private readonly StorageOptions _options;
+
+    /// <summary>
+    /// 저장 경로 설정을 받아 저장소를 만든다.
+    /// options의 DataPath를 사용하며 인스턴스 상태에 보관한다.
+    /// </summary>
+    public CsvSessionStore(StorageOptions options)
+    {
+        _options = options;
+    }
+
+    /// <summary>세션 CSV가 들어갈 디렉터리 경로.</summary>
+    public string SessionsDirectory => Path.Combine(_options.DataPath, "sessions");
+
+    /// <summary>raw gzip이 들어갈 디렉터리 경로.</summary>
+    public string RawDirectory => Path.Combine(_options.DataPath, "raw");
+
+    /// <summary>세션 CSV 파일의 전체 경로. 파트를 병합한 통합 파일이다.</summary>
+    public string SessionCsvPath(string sessionId) => Path.Combine(SessionsDirectory, sessionId + ".csv");
+
+    /// <summary>raw gzip 파일의 전체 경로. 구버전 단일 파일 호환용이다.</summary>
+    public string RawFilePath(string sessionId) => Path.Combine(RawDirectory, sessionId + ".jsonl.gz");
+
+    /// <summary>세션 메타 JSON 파일의 전체 경로.</summary>
+    public string MetaPath(string sessionId) => Path.Combine(SessionsDirectory, sessionId + ".meta.json");
+
+    /// <summary>세션 지표 CSV 파일의 전체 경로.</summary>
+    public string MetricsCsvPath(string sessionId) => Path.Combine(SessionsDirectory, sessionId + ".metrics.csv");
+
+    /// <summary>파트 번호 CSV의 전체 경로.</summary>
+    public string PartCsvPath(string sessionId, int partIndex) => Path.Combine(SessionsDirectory, $"{sessionId}.p{partIndex:D4}.csv");
+
+    /// <summary>파트 번호 raw gzip의 전체 경로.</summary>
+    public string RawPartPath(string sessionId, int partIndex) => Path.Combine(RawDirectory, $"{sessionId}.p{partIndex:D4}.jsonl.gz");
+
+    /// <summary>
+    /// 파일명 목록을 파트 번호 오름차순으로 정렬해 돌려준다.
+    /// 파일명과 파트 번호 정규식을 사용하며, 번호를 못 읽은 파일은 맨 뒤로 보낸다.
+    /// </summary>
+    private static List<(int Part, string Path)> SortPartFiles(IEnumerable<string> filePaths, Regex pattern)
+    {
+        List<(int Part, string Path)> parts = new();
+        foreach (string filePath in filePaths)
+        {
+            Match match = pattern.Match(Path.GetFileName(filePath));
+            parts.Add(match.Success ? (int.Parse(match.Groups[1].Value, CultureInfo.InvariantCulture), filePath) : (int.MaxValue, filePath));
+        }
+
+        parts.Sort((a, b) => a.Part.CompareTo(b.Part));
+        return parts;
+    }
+
+    /// <summary>
+    /// sessionId가 파일명으로 쓸 수 있는 형태인지 검사한다. path traversal과 제어문자 혼입을 막는다.
+    /// sessionId를 입력으로 사용하며 통과하면 true를 반환한다.
+    /// </summary>
+    public static bool IsValidSessionId(string? sessionId)
+    {
+        return !string.IsNullOrEmpty(sessionId) && _safeSessionId.IsMatch(sessionId);
+    }
+
+    /// <summary>
+    /// 세션 CSV가 디스크에 있는지 확인한다.
+    /// sessionId를 입력으로 사용하며 있으면 true를 반환한다.
+    /// </summary>
+    public bool SessionExists(string sessionId) => File.Exists(SessionCsvPath(sessionId));
+
+    /// <summary>
+    /// 세션 CSV 전문을 읽어 들인다. 다른 스레드의 교체 쓰기와 충돌하지 않도록 공유 읽기로 연다.
+    /// sessionId를 입력으로 사용하며 파일이 없으면 null을 반환한다.
+    /// </summary>
+    /// <summary>
+    /// 통합 CSV를 문자열로 올리지 않고 한 행씩 읽어 로그 항목 목록으로 만든다. CSV가 없으면 null.
+    /// </summary>
+    public List<LogEntry>? ReadSessionEntries(string sessionId)
+    {
+        string path = SessionCsvPath(sessionId);
+        if (!File.Exists(path))
+        {
+            return null;
+        }
+
+        using FileStream stream = new(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite, 1 << 16);
+        using StreamReader reader = new(stream, System.Text.Encoding.UTF8);
+        return SessionQuery.ParseEntries(reader);
+    }
+
+    /// <summary>
+    /// 업로드 배치를 파트 파일로 저장한다. 통합 CSV는 다시 만들지 않는다(RebuildSession이 몰아서 한다).
+    /// batch의 sessionId와 partIndex, entries, metrics와 수신 원문 rawBody를 사용하며, 세션 단위 잠금 안에서
+    /// 메타 JSON, 파트 CSV, 지표 CSV, 파트 raw gzip을 기록한다. 같은 파트 재전송은 교체로 멱등 처리된다.
+    /// </summary>
+    public void SavePartFiles(UploadBatch batch, byte[]? rawBody, bool rawBodyIsGzip)
+    {
+        // 세션 전체를 한 번에 직렬화하기 위해 메타 파일 경로를 세션 잠금으로 쓴다.
+        SemaphoreSlim gate = FileLocks.Get(MetaPath(batch.SessionId));
+        gate.Wait();
+        try
+        {
+            WriteMetaFile(batch);
+            WritePartCsv(batch);
+            WriteMetricsCsv(batch);
+            WriteRawPart(batch, rawBody, rawBodyIsGzip);
+        }
+        finally
+        {
+            gate.Release();
+        }
+    }
+
+    /// <summary>
+    /// 저장된 파트 CSV를 번호순으로 이어 붙여 통합 세션 CSV를 다시 만든다. 세션 단위 잠금 안에서 수행한다.
+    /// 파트를 여러 개 저장한 뒤 한 번만 부르면 된다.
+    /// </summary>
+    public void RebuildSession(string sessionId)
+    {
+        SemaphoreSlim gate = FileLocks.Get(MetaPath(sessionId));
+        gate.Wait();
+        try
+        {
+            RebuildMergedCsv(sessionId);
+        }
+        finally
+        {
+            gate.Release();
+        }
+    }
+
+    /// <summary>
+    /// 세션 헤더 정보를 메타 JSON으로 교체 기록한다.
+    /// 파트가 여러 번 나눠 오므로 종료 시각은 가장 늦은 값, 정상 종료·잘림 여부는 한 파트라도 true면 true로 합친다.
+    /// </summary>
+    private void WriteMetaFile(UploadBatch batch)
+    {
+        SessionMeta? previous = ReadMeta(batch.SessionId);
+        string endedAtUtc = batch.EndedAtUtc;
+        if (previous is not null && string.CompareOrdinal(previous.EndedAtUtc, endedAtUtc) > 0)
+        {
+            endedAtUtc = previous.EndedAtUtc;
+        }
+
+        SessionMeta meta = new SessionMeta
+        {
+            SessionId = batch.SessionId,
+            Project = string.IsNullOrEmpty(batch.Project) ? previous?.Project ?? string.Empty : batch.Project,
+            StartedAtUtc = batch.StartedAtUtc,
+            EndedAtUtc = endedAtUtc,
+            AppVersion = batch.AppVersion,
+            UnityVersion = batch.UnityVersion,
+            IsEditor = batch.IsEditor,
+            Platform = batch.Platform,
+            EndedCleanly = batch.EndedCleanly || (previous?.EndedCleanly ?? false),
+            Truncated = batch.Truncated || (previous?.Truncated ?? false),
+        };
+        WriteAtomicText(MetaPath(batch.SessionId), JsonSerializer.Serialize(meta, JsonWeb));
+    }
+
+    /// <summary>파트 항목을 헤더 없는 CSV 행들로 교체 기록한다. 통합 CSV의 행 형식과 같다.</summary>
+    private void WritePartCsv(UploadBatch batch)
+    {
+        StringBuilder builder = new StringBuilder();
+        foreach (LogEntry entry in batch.Entries ?? System.Array.Empty<LogEntry>())
+        {
+            builder.Append(BuildEntryRow(entry)).Append(CRLF);
+        }
+
+        WriteAtomicText(PartCsvPath(batch.SessionId, batch.PartIndex), builder.ToString());
+    }
+
+    /// <summary>세션 지표를 CSV로 교체 기록한다. 샘플이 비어 있으면 기존 지표 파일을 유지한다.</summary>
+    private void WriteMetricsCsv(UploadBatch batch)
+    {
+        MetricSample[] metrics = batch.Metrics ?? System.Array.Empty<MetricSample>();
+        if (metrics.Length == 0)
+        {
+            return;
+        }
+
+        StringBuilder builder = new StringBuilder();
+        builder.Append(METRICS_HEADER).Append(CRLF);
+        foreach (MetricSample sample in metrics)
+        {
+            builder.Append(EscapeCsvField(sample.Key ?? string.Empty)).Append(',');
+            builder.Append(sample.Count.ToString(CultureInfo.InvariantCulture)).Append(',');
+            builder.Append(sample.Sum.ToString("R", CultureInfo.InvariantCulture)).Append(CRLF);
+        }
+
+        WriteAtomicText(MetricsCsvPath(batch.SessionId), builder.ToString());
+    }
+
+    /// <summary>수신 원문을 파트 번호 raw gzip으로 교체 기록한다. KeepRawJsonl이 false면 아무것도 하지 않는다.</summary>
+    private void WriteRawPart(UploadBatch batch, byte[]? rawBody, bool rawBodyIsGzip)
+    {
+        if (!_options.KeepRawJsonl || rawBody is null)
+        {
+            return;
+        }
+
+        byte[] compressed = rawBodyIsGzip ? rawBody : GzipCompress(rawBody);
+        WriteAtomicBytes(RawPartPath(batch.SessionId, batch.PartIndex), compressed);
+    }
+
+    /// <summary>파트 CSV를 번호순으로 이어 붙여 통합 세션 CSV를 교체 기록한다.</summary>
+    private void RebuildMergedCsv(string sessionId)
+    {
+        StringBuilder builder = new StringBuilder();
+        builder.Append(SESSION_HEADER).Append(CRLF);
+        if (Directory.Exists(SessionsDirectory))
+        {
+            foreach ((int _, string partFile) in SortPartFiles(
+                Directory.GetFiles(SessionsDirectory, sessionId + ".p*.csv"), _partFilePattern))
+            {
+                builder.Append(File.ReadAllText(partFile));
+            }
+        }
+
+        WriteAtomicText(SessionCsvPath(sessionId), builder.ToString());
+    }
+
+    /// <summary>
+    /// 세션 메타 JSON을 읽어 들인다.
+    /// sessionId를 입력으로 사용하며 파일이 없거나 파싱에 실패하면 null을 반환한다.
+    /// </summary>
+    public SessionMeta? ReadMeta(string sessionId)
+    {
+        string path = MetaPath(sessionId);
+        if (!File.Exists(path))
+        {
+            return null;
+        }
+
+        try
+        {
+            return JsonSerializer.Deserialize<SessionMeta>(File.ReadAllText(path), JsonWeb);
+        }
+        catch (JsonException)
+        {
+            return null;
+        }
+    }
+
+    /// <summary>
+    /// 세션 지표 CSV를 읽어 샘플 목록으로 돌려준다.
+    /// sessionId를 입력으로 사용하며 파일이 없으면 빈 목록을 반환한다.
+    /// </summary>
+    public List<MetricSample> ReadMetrics(string sessionId)
+    {
+        string path = MetricsCsvPath(sessionId);
+        List<MetricSample> metrics = new();
+        if (!File.Exists(path))
+        {
+            return metrics;
+        }
+
+        List<string[]> rows = CsvText.ParseRows(File.ReadAllText(path));
+        for (int i = 1; i < rows.Count; i++)
+        {
+            string[] cells = rows[i];
+            if (cells.Length < 3)
+            {
+                continue;
+            }
+
+            metrics.Add(new MetricSample
+            {
+                Key = cells[0],
+                Count = long.TryParse(cells[1], NumberStyles.Integer, CultureInfo.InvariantCulture, out long count) ? count : 0,
+                Sum = MetricMath.ParseSum(cells[2]),
+            });
+        }
+
+        return metrics;
+    }
+
+    /// <summary>
+    /// 세션 raw gzip을 파트 번호순으로 이어 붙여 돌려준다(다중 멤버 gzip).
+    /// sessionId를 입력으로 사용하며 파트가 없으면 구버전 단일 파일을, 그것도 없으면 null을 반환한다.
+    /// </summary>
+    public byte[]? ReadRawMerged(string sessionId)
+    {
+        List<(int Part, string Path)> rawParts = Directory.Exists(RawDirectory)
+            ? SortPartFiles(Directory.GetFiles(RawDirectory, sessionId + ".p*.jsonl.gz"), _rawPartFilePattern)
+            : new List<(int, string)>();
+
+        if (rawParts.Count == 0)
+        {
+            string legacyPath = RawFilePath(sessionId);
+            return File.Exists(legacyPath) ? File.ReadAllBytes(legacyPath) : null;
+        }
+
+        using MemoryStream merged = new();
+        foreach ((int _, string partFile) in rawParts)
+        {
+            byte[] bytes = File.ReadAllBytes(partFile);
+            merged.Write(bytes, 0, bytes.Length);
+        }
+
+        return merged.ToArray();
+    }
+
+    /// <summary>
+    /// 세션 파일 경로 목록. sessions 아래(통합·메타·지표·파트 CSV)와 raw 아래(단일·파트 gzip)를 (하위 폴더 이름, 경로)로 돌려준다.
+    /// </summary>
+    private List<(string Folder, string Path)> SessionFiles(string sessionId)
+    {
+        List<(string Folder, string Path)> files = new();
+        foreach (string path in new[] { MetaPath(sessionId), MetricsCsvPath(sessionId), SessionCsvPath(sessionId) })
+        {
+            if (File.Exists(path))
+            {
+                files.Add(("sessions", path));
+            }
+        }
+
+        if (Directory.Exists(SessionsDirectory))
+        {
+            files.AddRange(Directory.GetFiles(SessionsDirectory, sessionId + ".p*.csv").Select(p => ("sessions", p)));
+        }
+
+        if (Directory.Exists(RawDirectory))
+        {
+            files.AddRange(Directory.GetFiles(RawDirectory, sessionId + ".p*.jsonl.gz").Select(p => ("raw", p)));
+        }
+
+        if (File.Exists(RawFilePath(sessionId)))
+        {
+            files.Add(("raw", RawFilePath(sessionId)));
+        }
+
+        return files;
+    }
+
+    /// <summary>세션 파일(sessions·raw)이 하나라도 있으면 true.</summary>
+    public bool HasSessionFiles(string sessionId) => SessionFiles(sessionId).Count > 0;
+
+    /// <summary>
+    /// 세션의 sessions 폴더 파일(통합 CSV·메타·지표·파트)을 바로 지운다. 휴지통을 거치지 않으므로 분석 서버의 사본 정리에만 쓴다.
+    /// sessionId를 입력으로 사용하며 지운 파일 수를 반환한다.
+    /// </summary>
+    public int DeleteSessionFiles(string sessionId)
+    {
+        SemaphoreSlim gate = FileLocks.Get(MetaPath(sessionId));
+        gate.Wait();
+        try
+        {
+            int deleted = 0;
+            foreach ((string folder, string path) in SessionFiles(sessionId))
+            {
+                if (folder == "sessions" && File.Exists(path))
+                {
+                    File.Delete(path);
+                    deleted++;
+                }
+            }
+
+            return deleted;
+        }
+        finally
+        {
+            gate.Release();
+        }
+    }
+
+    /// <summary>
+    /// 통합 CSV가 있는 모든 세션의 마지막 변경 시각(UTC)을 한 번에 구한다.
+    /// sessions 폴더를 한 번만 훑어 통합 CSV·메타·지표·파트 파일 중 가장 늦은 수정 시각을 세션별로 모은다.
+    /// 세션마다 폴더를 다시 훑으면 세션 수만큼 느려지므로, 목록을 만들 때는 이 메서드를 쓴다.
+    /// </summary>
+    public Dictionary<string, DateTime> ListSessionChanges()
+    {
+        Dictionary<string, DateTime> latest = new(StringComparer.Ordinal);
+        if (!Directory.Exists(SessionsDirectory))
+        {
+            return latest;
+        }
+
+        HashSet<string> withCsv = new(StringComparer.Ordinal);
+        Dictionary<string, DateTime> touched = new(StringComparer.Ordinal);
+        foreach (string path in Directory.EnumerateFiles(SessionsDirectory))
+        {
+            string file = Path.GetFileName(path);
+            string id;
+            if (file.EndsWith(".metrics.csv", StringComparison.Ordinal))
+            {
+                id = file[..^".metrics.csv".Length];
+            }
+            else if (file.EndsWith(".meta.json", StringComparison.Ordinal))
+            {
+                id = file[..^".meta.json".Length];
+            }
+            else if (_partFilePattern.Match(file) is { Success: true } part)
+            {
+                id = part.Groups["id"].Value;
+            }
+            else if (file.EndsWith(".csv", StringComparison.Ordinal))
+            {
+                id = file[..^".csv".Length];
+                withCsv.Add(id);
+            }
+            else
+            {
+                continue;
+            }
+
+            if (!IsValidSessionId(id))
+            {
+                continue;
+            }
+
+            DateTime written = File.GetLastWriteTimeUtc(path);
+            if (!touched.TryGetValue(id, out DateTime known) || written > known)
+            {
+                touched[id] = written;
+            }
+        }
+
+        foreach (string id in withCsv)
+        {
+            latest[id] = touched[id];
+        }
+
+        return latest;
+    }
+
+    /// <summary>
+    /// 세션 파일을 targetRoot/sessions, targetRoot/raw 아래로 옮긴다(휴지통). 세션 잠금 안에서 옮기며 옮긴 파일 수를 반환한다.
+    /// </summary>
+    public int MoveSessionFiles(string sessionId, string targetRoot)
+    {
+        SemaphoreSlim gate = FileLocks.Get(MetaPath(sessionId));
+        gate.Wait();
+        try
+        {
+            int moved = 0;
+            foreach ((string folder, string path) in SessionFiles(sessionId))
+            {
+                string target = Path.Combine(targetRoot, folder, Path.GetFileName(path));
+                Directory.CreateDirectory(Path.GetDirectoryName(target)!);
+                if (path == MetaPath(sessionId))
+                {
+                    // 메타 경로가 곧 세션 잠금이라 잠금 없이 옮긴다(재진입 시 교착)
+                    File.Move(path, target, overwrite: true);
+                }
+                else
+                {
+                    MoveLocked(path, target);
+                }
+
+                moved++;
+            }
+
+            return moved;
+        }
+        finally
+        {
+            gate.Release();
+        }
+    }
+
+    /// <summary>
+    /// sourceRoot/sessions, sourceRoot/raw 아래 세션 파일을 제자리로 돌린다(휴지통 복원).
+    /// 같은 세션 파일이 이미 있으면(삭제 뒤 다시 업로드됨) 아무것도 옮기지 않고 false를 반환한다.
+    /// </summary>
+    public bool RestoreSessionFiles(string sessionId, string sourceRoot)
+    {
+        if (SessionFiles(sessionId).Count > 0)
+        {
+            return false;
+        }
+
+        SemaphoreSlim gate = FileLocks.Get(MetaPath(sessionId));
+        gate.Wait();
+        try
+        {
+            foreach ((string folder, string directory) in new[] { ("sessions", SessionsDirectory), ("raw", RawDirectory) })
+            {
+                string source = Path.Combine(sourceRoot, folder);
+                if (!Directory.Exists(source))
+                {
+                    continue;
+                }
+
+                Directory.CreateDirectory(directory);
+                foreach (string file in Directory.GetFiles(source))
+                {
+                    File.Move(file, Path.Combine(directory, Path.GetFileName(file)));
+                }
+            }
+
+            return true;
+        }
+        finally
+        {
+            gate.Release();
+        }
+    }
+
+    private static void MoveLocked(string path, string target)
+    {
+        SemaphoreSlim gate = FileLocks.Get(path);
+        gate.Wait();
+        try
+        {
+            File.Move(path, target, overwrite: true);
+        }
+        finally
+        {
+            gate.Release();
+        }
+    }
+
+    /// <summary>
+    /// 로그 항목 하나를 통합 CSV 한 행 문자열로 바꾼다.
+    /// entry를 입력으로 사용하며 타임스탬프 포매팅과 길이 절단, CSV 이스케이프가 적용된 행을 반환한다.
+    /// </summary>
+    public static string BuildEntryRow(LogEntry entry)
+    {
+        StringBuilder builder = new StringBuilder();
+        builder.Append(FormatTimestamp(entry.TimestampUtc)).Append(',');
+        builder.Append(EscapeCsvField(NormalizeField(entry.Level, MAX_SHORT_CHARS))).Append(',');
+        builder.Append(EscapeCsvField(NormalizeField(entry.Category, MAX_SHORT_CHARS))).Append(',');
+        builder.Append(EscapeCsvField(NormalizeField(entry.Scene, MAX_SHORT_CHARS))).Append(',');
+        builder.Append(EscapeCsvField(NormalizeField(entry.Message, MAX_MESSAGE_CHARS))).Append(',');
+        builder.Append(EscapeCsvField(NormalizeField(entry.DataJson, MAX_DATA_CHARS))).Append(',');
+        builder.Append(EscapeCsvField(NormalizeField(entry.StackTrace, MAX_STACK_CHARS)));
+        return builder.ToString();
+    }
+
+    /// <summary>
+    /// data 아래 sessions, summary, raw 디렉터리를 없으면 만든다.
+    /// 입력값은 없으며 파일 시스템에 디렉터리를 추가로 반영한다.
+    /// </summary>
+    public void EnsureDirectories()
+    {
+        Directory.CreateDirectory(SessionsDirectory);
+        Directory.CreateDirectory(Path.Combine(_options.DataPath, "summary"));
+        Directory.CreateDirectory(RawDirectory);
+    }
+
+    /// <summary>
+    /// RawRetentionDays를 넘긴 raw gzip 파일을 삭제한다.
+    /// options.RawRetentionDays를 기준 삼아 data/raw의 마지막 수정 시각이 지난 파일을 지우고 삭제 개수를 반환한다.
+    /// </summary>
+    public int DeleteExpiredRawFiles()
+    {
+        if (!_options.KeepRawJsonl || _options.RawRetentionDays <= 0 || !Directory.Exists(RawDirectory))
+        {
+            return 0;
+        }
+
+        DateTime deadline = DateTime.UtcNow.AddDays(-_options.RawRetentionDays);
+        int deleted = 0;
+        foreach (string file in Directory.GetFiles(RawDirectory, "*.gz"))
+        {
+            if (File.GetLastWriteTimeUtc(file) >= deadline)
+            {
+                continue;
+            }
+
+            try
+            {
+                File.Delete(file);
+                deleted++;
+            }
+            catch (IOException ex)
+            {
+                Console.WriteLine($"raw delete failed: {file} ({ex.Message})");
+            }
+        }
+
+        return deleted;
+    }
+
+    /// <summary>
+    /// RFC 4180 규칙으로 CSV 필드를 감싼다. 쉼표·따옴표·개행이 있으면 쌍따옴표로 감추고 내부 따옴표는 두 번 쓴다.
+    /// value를 입력으로 사용하며 이스케이프된 문자열을 반환한다.
+    /// </summary>
+    public static string EscapeCsvField(string? value)
+    {
+        if (string.IsNullOrEmpty(value))
+        {
+            return string.Empty;
+        }
+
+        bool needsQuote = value.Contains(',') || value.Contains('"') || value.Contains('\n') || value.Contains('\r');
+        if (!needsQuote)
+        {
+            return value;
+        }
+
+        return "\"" + value.Replace("\"", "\"\"", StringComparison.Ordinal) + "\"";
+    }
+
+    /// <summary>
+    /// CR, CRLF 개행을 LF로 통일한다.
+    /// value를 입력으로 사용하며 개행이 정규화된 문자열을 반환한다.
+    /// </summary>
+    public static string NormalizeNewlines(string? value)
+    {
+        if (string.IsNullOrEmpty(value))
+        {
+            return string.Empty;
+        }
+
+        return value.Replace("\r\n", "\n", StringComparison.Ordinal).Replace("\r", "\n", StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// 필드의 개행을 통일하고 maxChars를 넘는 뒤쪽을 버린다.
+    /// value와 maxChars를 사용하며 절단된 문자열을 반환한다.
+    /// </summary>
+    private static string NormalizeField(string? value, int maxChars)
+    {
+        string normalized = NormalizeNewlines(value);
+        return normalized.Length <= maxChars ? normalized : normalized[..maxChars];
+    }
+
+    /// <summary>
+    /// ISO 8601 시각 문자열을 Excel에서 인식하기 좋은 yyyy-MM-dd HH:mm:ss.fff로 바꾼다.
+    /// timestamp를 입력으로 사용하며 파싱 실패 시 원문 문자열을 그대로 반환한다.
+    /// </summary>
+    private static string FormatTimestamp(string? timestamp)
+    {
+        if (TryParseUtc(timestamp, out DateTime value))
+        {
+            return value.ToString(TIMESTAMP_FORMAT, CultureInfo.InvariantCulture);
+        }
+
+        return NormalizeNewlines(timestamp).Trim();
+    }
+
+    /// <summary>
+    /// ISO 8601 문자열을 UTC DateTime으로 해석한다.
+    /// text를 입력으로 사용하며 성공 여부와 해석 결과를 반환한다.
+    /// </summary>
+    public static bool TryParseUtc(string? text, out DateTime value)
+    {
+        return DateTime.TryParse(
+            text,
+            CultureInfo.InvariantCulture,
+            DateTimeStyles.AdjustToUniversal | DateTimeStyles.AssumeUniversal,
+            out value);
+    }
+
+    /// <summary>
+    /// 바이트 배열을 gzip으로 압축한다.
+    /// raw를 입력으로 사용하며 압축된 바이트 배열을 반환한다.
+    /// </summary>
+    private static byte[] GzipCompress(byte[] raw)
+    {
+        using MemoryStream buffer = new();
+        using (GZipStream gzip = new(buffer, CompressionLevel.Optimal, true))
+        {
+            gzip.Write(raw, 0, raw.Length);
+        }
+
+        return buffer.ToArray();
+    }
+
+    /// <summary>
+    /// 텍스트를 UTF-8 BOM으로 임시 파일에 쓴 뒤 덮어써서 중간에 잘린 CSV를 막는다.
+    /// path와 content를 사용하며 대상 파일 내용을 교체한다.
+    /// </summary>
+    private static void WriteAtomicText(string path, string content)
+    {
+        string temp = path + ".tmp";
+        File.WriteAllText(temp, content, _utf8Bom);
+        File.Move(temp, path, true);
+    }
+
+    /// <summary>
+    /// 바이트 배열을 임시 파일에 쓴 뒤 덮어써서 잘린 raw 파일을 막는다.
+    /// path와 bytes를 사용하며 대상 파일 내용을 교체한다.
+    /// </summary>
+    private static void WriteAtomicBytes(string path, byte[] bytes)
+    {
+        string temp = path + ".tmp";
+        File.WriteAllBytes(temp, bytes);
+        File.Move(temp, path, true);
+    }
+}
