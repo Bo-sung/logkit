@@ -56,3 +56,16 @@ GameLogger.Measure("RunDuration", 5); // 값 기록(횟수 + 합계 → 평균 �
 - 결과는 프로젝트 루트의 `LogKitMaps/`(설정 가능)에 저장된다. 대시보드 리플레이 페이지의 **맵 배경 이미지 관리**에 PNG와 JSON을 올리거나,
   **서버에 바로 올리기**를 켜고 분석 서버 주소(기본 `http://localhost:5001`)·API 키를 넣으면 찍자마자 `POST /api/maps/{씬}`으로 등록한다.
 
+## 빌드 계약 (CI)
+
+빌드할 때 패키지가 아래 환경변수를 읽어 빌드에 넣습니다. 프로젝트마다 빌드 스크립트를 만들 필요가 없습니다.
+
+| 환경변수 | 값 | 비고 |
+| --- | --- | --- |
+| `LOGKIT_SERVER_URL` | `http://<로그 서버 IP>:5000/api/logs` | 필수. localhost 금지 |
+| `LOGKIT_UPLOAD_KEY` | 프로젝트 업로드 키 | 필수. CI에서는 **비밀값**으로 저장 |
+
+- 두 값이 없으면 빌드가 실패합니다. 로컬에서 빌드할 때만 `LOGKIT_OPTIONAL=1`로 건너뛸 수 있습니다.
+- localhost 주소는 `LOGKIT_ALLOW_LOCALHOST=1`일 때만 허용합니다.
+- 빌드 중에 `Assets/Resources/LogKitBuildConfig.json`이 만들어지고, 빌드가 끝나면 지워집니다.
+- 게임 실행 때 Inspector나 `Configure`에 값이 있으면 그 값을 쓰고, 없을 때만 빌드 설정을 씁니다.

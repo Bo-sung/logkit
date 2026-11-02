@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.IO;
@@ -199,6 +199,28 @@ namespace LogKit
             lock (_stateLock)
             {
                 _uploader = new LogUploader(ResolveServerUrl(), _apiKey, _requestTimeoutSeconds);
+            }
+        }
+
+        /// <summary>
+        /// 빌드 때 넣은 LogKit 빌드 설정(LogKitBuildConfig)을 낮은 우선순위로 적용한다.
+        /// Configure나 Inspector에 값이 있으면 그 값을 유지하고, 비어 있거나 기본 로컬 주소일 때만 빌드 설정을 쓴다.
+        /// </summary>
+        private void ApplyBuildConfig()
+        {
+            LogKitBuildConfig config = LogKitBuildConfig.Load();
+            if (config == null)
+                return;
+
+            if (string.IsNullOrWhiteSpace(_apiKey) && !string.IsNullOrWhiteSpace(config.uploadKey))
+                _apiKey = config.uploadKey;
+
+            if (!string.IsNullOrWhiteSpace(config.serverUrl))
+            {
+                if (string.IsNullOrWhiteSpace(_developmentServerUrl) || _developmentServerUrl == DEFAULT_SERVER_URL)
+                    _developmentServerUrl = config.serverUrl;
+                if (string.IsNullOrWhiteSpace(_releaseServerUrl) || _releaseServerUrl == DEFAULT_SERVER_URL)
+                    _releaseServerUrl = config.serverUrl;
             }
         }
 
@@ -429,6 +451,7 @@ namespace LogKit
             };
             _logDirectory = Path.Combine(Application.persistentDataPath, LOG_DIRECTORY_NAME);
             ConsumeStartupOverrides();
+            ApplyBuildConfig();
             _uploader = new LogUploader(ResolveServerUrl(), _apiKey, _requestTimeoutSeconds);
 
             Scene activeScene = SceneManager.GetActiveScene();
