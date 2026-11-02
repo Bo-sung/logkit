@@ -13,7 +13,8 @@ param(
     [string]$IngestHost = '172.21.10.67',
     [string]$RegistryPath = 'C:\UnityCI\analytics-registry.json',
     [string]$SecretsDir = 'C:\UnityCI\secrets',
-    [switch]$Apply
+    [switch]$Apply,
+    [switch]$RefreshSecrets
 )
 
 $ErrorActionPreference = 'Continue'   # native git writes progress to stderr; failures are checked with `$LASTEXITCODE and throw
@@ -66,6 +67,34 @@ function Wait-Json([string]$url, [hashtable]$headers, [int]$seconds, [scriptbloc
     return $null
 }
 
+# Writes the secrets file: every address and key a user needs for LogKit, with where each key goes.
+# Lines starting with KEY= are machine-readable (used by -RefreshSecrets); keep them exact.
+function Write-Secrets([string]$path, [string]$projectName, [int]$analyticsPort, [string]$ingestHost, [int]$ingestPort, [string]$analyticsKey, [string]$uploadKey, [string]$readKey) {
+    $lines = New-Object System.Collections.Generic.List[string]
+    $lines.Add('# ' + $projectName + ' analytics - addresses and keys (do not share, do not commit)')
+    $lines.Add('')
+    $lines.Add('## Addresses')
+    $lines.Add('GM tool (session logs)          : http://' + $ingestHost + ':' + $ingestPort + '/dashboard')
+    $lines.Add('Analytics page (' + $projectName + ')  : http://' + $ingestHost + ':' + $analyticsPort + '/analytics')
+    $lines.Add('Game log upload (GameLogger)    : http://' + $ingestHost + ':' + $ingestPort + '/api/logs')
+    $lines.Add('Ingest health                   : http://' + $ingestHost + ':' + $ingestPort + '/health')
+    $lines.Add('Analytics health                : http://' + $ingestHost + ':' + $analyticsPort + '/health')
+    $lines.Add('')
+    $lines.Add('## Keys (value on the line after the label; the KEY= lines are read by tooling)')
+    $lines.Add('# READ: GM tool "API 키" box. Views all projects. Cannot delete. Shared across projects.')
+    $lines.Add('READ_KEY=' + $readKey)
+    $lines.Add('# ANALYTICS_KEY: this project''s analytics page "API 키" box only. Not accepted by the GM tool.')
+    $lines.Add('ANALYTICS_KEY=' + $analyticsKey)
+    $lines.Add('# UPLOAD_KEY: game build GameLogger "Api Key" only. Cannot view anything.')
+    $lines.Add('UPLOAD_KEY=' + $uploadKey)
+    $lines.Add('')
+    $lines.Add('## Where to type what')
+    $lines.Add('- GameLogger (game build)      -> UPLOAD_KEY')
+    $lines.Add('- GM tool login                -> READ_KEY')
+    $lines.Add('- ' + $projectName + ' analytics page login -> ANALYTICS_KEY')
+    [System.IO.File]::WriteAllText($path, (($lines -join "`r`n") + "`r`n"), $Utf8)
+}
+
 # ---------- 1. Plan ----------
 # -cnotmatch: case-sensitive. The ingest server accepts lowercase names only.
 if ($Name -cnotmatch '^[a-z0-9][a-z0-9_-]{0,31}$') {
@@ -75,18 +104,23 @@ if ($Name -cnotmatch '^[a-z0-9][a-z0-9_-]{0,31}$') {
 # Read-only here. The registry is created or updated only with -Apply.
 $registry = if (Test-Path $RegistryPath) { Read-Json $RegistryPath } else { [PSCustomObject]@{ ingest = [PSCustomObject]@{ port = $IngestPort; dir = $IngestDir }; projects = @() } }
 $projects = @($registry.projects)
-if ($projects | Where-Object { $_.name -eq $Name }) { throw ('project already registered: ' + $Name + ' (use the redeploy script)') }
+if (-not $RefreshSecrets -and ($projects | Where-Object { $_.name -eq $Name })) { throw ('project already registered: ' + $Name + ' (use -RefreshSecrets to rewrite its secrets file)') }
 
 $maxPort = $IngestPort
 foreach ($p in $projects) { if ([int]$p.port -gt $maxPort) { $maxPort = [int]$p.port } }
 $port = $maxPort + 1
 while ((Test-PortListening $port) -or ($projects | Where-Object { [int]$_.port -eq $port })) { $port++ }
 
+# Refresh mode reuses the port recorded in the registry, not a new one.
+if ($RefreshSecrets) {
+    $registered = $projects | Where-Object { $_.name -eq $Name } | Select-Object -First 1
+    if ($registered) { $port = [int]$registered.port }
+}
 $repo = Join-Path $ReposRoot ('logkit-analytics-' + $Name)
 $deploy = Join-Path $DeployRoot $Name
 $secretsFile = Join-Path $SecretsDir ($Name + '.txt')
-if (Test-Path $repo) { throw ('repo folder already exists: ' + $repo) }
-if (Test-Path $deploy) { throw ('deploy folder already exists: ' + $deploy) }
+if (-not $RefreshSecrets -and (Test-Path $repo)) { throw ('repo folder already exists: ' + $repo) }
+if (-not $RefreshSecrets -and (Test-Path $deploy)) { throw ('deploy folder already exists: ' + $deploy) }
 
 Write-Host ''
 Write-Host ('Project      : ' + $Name)
@@ -97,6 +131,22 @@ Write-Host ('Ingest       : ' + $IngestDir + ' port ' + $IngestPort + ' (add Pro
 Write-Host ('Analytics URL: http://' + $IngestHost + ':' + $port + '/analytics')
 Write-Host ('Secrets      : ' + $secretsFile)
 Write-Host ('Registry     : ' + $RegistryPath)
+if ($RefreshSecrets) {
+    $entry = $projects | Where-Object { $_.name -eq $Name } | Select-Object -First 1
+    if (-not $entry) { throw ('not registered: ' + $Name) }
+    if (-not (Test-Path $secretsFile)) { throw ('secrets file not found: ' + $secretsFile) }
+    $oldKeys = @{}
+    foreach ($line in (Get-Content $secretsFile)) {
+        if ($line -cmatch '^(ANALYTICS_KEY|UPLOAD_KEY)=(.*)$') { $oldKeys[$matches[1]] = $matches[2] }
+    }
+    if (-not $oldKeys['ANALYTICS_KEY'] -or -not $oldKeys['UPLOAD_KEY']) { throw 'existing keys not found in the secrets file; refusing to rewrite' }
+    $ingestCfg = Read-Json (Join-Path $IngestDir 'appsettings.json')
+    $readKey = if ($ingestCfg.ReadApiKey) { [string]$ingestCfg.ReadApiKey } else { [string]$ingestCfg.ApiKey }
+    Write-Secrets $secretsFile $Name ([int]$entry.port) $IngestHost $IngestPort $oldKeys['ANALYTICS_KEY'] $oldKeys['UPLOAD_KEY'] $readKey
+    Write-Host ('secrets file rewritten (keys kept): ' + $secretsFile) -ForegroundColor Green
+    return
+}
+
 Write-Host ''
 
 if (-not $Apply) {
@@ -194,14 +244,7 @@ try {
 
     Write-Step 'save secrets and registry'
     if (-not (Test-Path $SecretsDir)) { New-Item -ItemType Directory -Path $SecretsDir | Out-Null }
-    # Each element is parenthesized: a bare '+' after a comma would join the array instead of the strings.
-    $secretText = @(
-        ('# ' + $Name + ' analytics keys (do not commit)'),
-        ('ANALYTICS_KEY=' + $analyticsKey),
-        ('UPLOAD_KEY=' + $uploadKey),
-        ('URL=http://' + $IngestHost + ':' + $port + '/analytics')
-    ) -join "`r`n"
-    [System.IO.File]::WriteAllText($secretsFile, $secretText + "`r`n", $Utf8)
+    Write-Secrets $secretsFile $Name $port $IngestHost $IngestPort $analyticsKey $uploadKey $readKey
 
     $entry = [ordered]@{ name = $Name; port = $port; repo = $repo; deploy = $deploy; secrets = $secretsFile; createdUtc = (Get-Date).ToUniversalTime().ToString('o') }
     $registry.projects = @($registry.projects) + @([PSCustomObject]$entry)
