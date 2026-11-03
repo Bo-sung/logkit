@@ -5,7 +5,6 @@
 param(
     [Parameter(Mandatory = $true)][string]$Name,
     [string]$Template = 'C:\Gits\logkit-analytics-template',
-    [string]$CoreRepo = 'C:\Gits\logkit-core',
     [string]$ReposRoot = 'C:\Gits',
     [string]$DeployRoot = 'C:\UnityCI\LogAnalytics',
     [string]$IngestDir = 'C:\UnityCI\LogServer',
@@ -125,7 +124,7 @@ if (-not $RefreshSecrets -and (Test-Path $deploy)) { throw ('deploy folder alrea
 Write-Host ''
 Write-Host ('Project      : ' + $Name)
 Write-Host ('Port         : ' + $port)
-Write-Host ('Repo         : ' + $repo + '  (from ' + $Template + ', core ' + $CoreRepo + ')')
+Write-Host ('Repo         : ' + $repo + '  (from ' + $Template + ', core included)')
 Write-Host ('Deploy       : ' + $deploy)
 Write-Host ('Ingest       : ' + $IngestDir + ' port ' + $IngestPort + ' (add Projects["' + $Name + '"] and restart)')
 Write-Host ('Analytics URL: http://' + $IngestHost + ':' + $port + '/analytics')
@@ -160,10 +159,6 @@ git clone -q $Template $repo
 if ($LASTEXITCODE -ne 0) { throw 'git clone failed' }
 Push-Location $repo
 try {
-    # Local override only (.git/config). The committed .gitmodules keeps the GitHub URL.
-    git config submodule.core.url $CoreRepo
-    git -c protocol.file.allow=always submodule update -q --init
-    if ($LASTEXITCODE -ne 0) { throw 'core submodule update failed (check CoreRepo and the pinned commit)' }
 
     # ---------- 3. Keys ----------
     Write-Step 'create keys'
